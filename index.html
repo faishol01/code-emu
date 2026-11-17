@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- On hosts that can't send COOP/COEP headers (such as GitHub Pages), this service
+     worker adds them, which interactive mode needs. It must load first. -->
+<script>window.coi = { coepCredentialless: () => false, quiet: true };</script>
+<script src="coi-serviceworker.js"></script>
+<title>cpp.wasm: run C++ in your browser</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
+<link rel="stylesheet" href="src/vendors/ibm-plex/plex.css">
+<link rel="stylesheet" href="src/vendors/codemirror/codemirror.css">
+<link rel="stylesheet" href="src/css/style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <a href="#" id="brand-link" title="Home"><strong>cpp<span>.</span>wasm</strong></a>
+    <small>Clang compiles your code to WebAssembly and runs it, all inside this tab.</small>
+  </div>
+
+  <ol class="pipeline" aria-label="Build progress">
+    <li class="step" data-step="toolchain"><span class="node"></span><span class="name">toolchain</span><span class="time"></span></li>
+    <li class="step" data-step="compile"><span class="node"></span><span class="name">clang</span><span class="time"></span></li>
+    <li class="step" data-step="link"><span class="node"></span><span class="name">wasm-ld</span><span class="time"></span></li>
+    <li class="step" data-step="run"><span class="node"></span><span class="name">run</span><span class="time"></span></li>
+  </ol>
+
+  <div class="controls">
+    <button type="button" id="rec-btn" class="rec-btn" aria-pressed="false"><span class="rec-dot" aria-hidden="true"></span><span class="label">Record</span></button>
+    <div class="collab-wrap">
+      <button type="button" id="collab-btn" class="collab-btn" aria-expanded="false" aria-controls="collab-panel"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5c.6-2.4 2.3-3.7 4.5-3.7s3.9 1.3 4.5 3.7"/><path d="M10.5 3.2a2.4 2.4 0 010 4.6M12.2 9.9c1.2.5 2 1.7 2.3 3.6"/></svg><span class="label">Collaborate</span></button>
+      <div class="collab-panel" id="collab-panel" role="dialog" aria-label="Collaboration" hidden></div>
+    </div>
+    <div class="seg" role="group" aria-label="Input mode">
+      <button type="button" id="mode-batch" aria-pressed="true">Batch input</button>
+      <button type="button" id="mode-interactive" aria-pressed="false">Interactive</button>
+    </div>
+    <button id="run" type="button" title="Run (Ctrl+Enter)"><span id="run-label">Run</span><kbd>⌃↵</kbd></button>
+  </div>
+</header>
+
+<main>
+  <aside class="pane files" id="files" aria-label="Files">
+    <div class="pane-head">
+      <h2>Files</h2>
+      <div class="files-actions">
+        <button type="button" class="icon-btn" id="import-zip" title="Import files from a zip"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9.5V2M4 4.8L7 2l3 2.8M2 9.5v2.5h10V9.5"/></svg></button>
+        <button type="button" class="icon-btn" id="export-zip" title="Export all files as a zip"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 2v7.5M4 6.7L7 9.5l3-2.8M2 9.5v2.5h10V9.5"/></svg></button>
+        <button type="button" class="icon-btn" id="new-file" title="New file"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M7 2v10M2 7h10"/></svg></button>
+      </div>
+    </div>
+    <ul id="file-list"></ul>
+    <p class="files-msg" id="files-msg" aria-live="polite"></p>
+  </aside>
+
+  <section class="pane editor" aria-label="Source code">
+    <div class="pane-head">
+      <div class="head-left">
+        <button type="button" class="icon-btn" id="toggle-files" aria-controls="files" aria-expanded="true" title="Show or hide the file list"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M6 2.5v11"/></svg></button>
+        <h2 id="file-title">main.cpp</h2>
+      </div>
+      <div class="head-right">
+        <span class="notice" id="format-note" aria-live="polite"></span>
+        <button type="button" id="format" title="Format code (Shift+Alt+F)">Format</button>
+      </div>
+    </div>
+    <div id="editor-wrap"><textarea id="fallback-editor" wrap="off" spellcheck="false" aria-label="C++ source"></textarea></div>
+  </section>
+
+  <div class="side">
+    <section class="pane" id="input-pane" aria-label="Program input">
+      <div class="pane-head">
+        <h2>Input</h2>
+        <span class="hint" id="batch-hint">Sent all at once before the program starts.</span>
+      </div>
+      <textarea id="stdin" spellcheck="false" placeholder="Type the program’s input here"></textarea>
+    </section>
+
+    <section class="pane" aria-label="Output">
+      <div class="pane-head">
+        <h2 id="out-title">Terminal</h2>
+        <button type="button" id="clear">Clear</button>
+      </div>
+      <pre id="output" aria-live="polite"><span class="empty">Press Run or Ctrl+Enter. The first run waits for the compiler download (a few dozen MB). After that, builds take a second or two.</span></pre>
+      <div class="term-input" id="term-row">
+        <span class="prompt" aria-hidden="true">›</span>
+        <input id="term-input" type="text" autocomplete="off" spellcheck="false" aria-label="Program input" placeholder="Run the program to type input" disabled>
+        <button type="button" id="term-eof" title="End of input (Ctrl+D)" disabled>EOF</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<section id="home" aria-labelledby="home-title">
+  <div class="home">
+    <h1 id="home-title" tabindex="-1">Write, compile and run C++<span>right in your browser.</span></h1>
+    <p class="lede">Clang turns your code into WebAssembly on this device. Nothing is uploaded: your files stay in this browser until you export them.</p>
+
+    <div class="resume" id="resume" hidden>
+      <div class="resume-text">
+        <strong>Continue where you left off</strong>
+        <span id="resume-detail"></span>
+      </div>
+      <div class="resume-actions">
+        <button type="button" class="btn" id="home-export">Export zip</button>
+        <button type="button" class="btn primary" id="home-continue">Continue</button>
+      </div>
+    </div>
+
+    <div class="start">
+      <button type="button" class="start-card" id="home-new">
+        <span class="start-icon"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></span>
+        <span class="start-title">New workspace</span>
+        <span class="start-desc">Start fresh with a single main.cpp.</span>
+      </button>
+      <button type="button" class="start-card drop" id="home-import">
+        <span class="start-icon"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13V3M6 7l4-4 4 4M3 13v4h14v-4"/></svg></span>
+        <span class="start-title">Import a zip</span>
+        <span class="start-desc">Drop a .zip here, or click to choose one.</span>
+      </button>
+    </div>
+    <p class="home-msg" id="home-msg" aria-live="polite"></p>
+
+    <section class="home-collab" id="home-collab" aria-labelledby="home-collab-title" hidden>
+      <div class="home-collab-head">
+        <span class="start-icon"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7.5" cy="7" r="3"/><path d="M2 17c.7-3 2.8-4.6 5.5-4.6S12.3 14 13 17"/><path d="M13 4a3 3 0 010 5.8M15.2 12.6c1.5.6 2.4 2 2.8 4.4"/></svg></span>
+        <div>
+          <h2 id="home-collab-title">Collaborate in a room</h2>
+          <p>Edit files with other people in real time. Share the link; everyone runs programs on their own device.</p>
+        </div>
+      </div>
+      <div class="home-collab-grid">
+        <div class="home-collab-start">
+          <h3>Start a room</h3>
+          <div class="home-fields">
+            <label class="collab-field"><span>Your name</span><input type="text" id="home-my-name" maxlength="32" spellcheck="false" autocomplete="off"></label>
+            <label class="collab-field"><span>Room name (optional)</span><input type="text" id="home-room-name" maxlength="40" placeholder="e.g. Algorithms study group" spellcheck="false" autocomplete="off"></label>
+          </div>
+          <fieldset class="home-seed" id="home-seed">
+            <legend>Start with</legend>
+            <label><input type="radio" name="home-seed" value="mine" checked> <span id="home-seed-mine">My files</span></label>
+            <label><input type="radio" name="home-seed" value="new"> A new main.cpp</label>
+          </fieldset>
+          <button type="button" class="btn primary" id="home-room-start">Start a room</button>
+        </div>
+        <div class="home-collab-join">
+          <h3>Join a room</h3>
+          <label class="collab-field"><span>Room link or code</span><input type="text" id="home-room-code" placeholder="abcd-efgh-jkmn" spellcheck="false" autocomplete="off"></label>
+          <button type="button" class="btn" id="home-room-join">Join</button>
+          <p class="collab-error" id="home-room-error" aria-live="polite"></p>
+        </div>
+      </div>
+      <p class="home-collab-note">Joining or starting a room doesn’t change your own workspace: it’s set aside while you’re in the room and comes back when you leave.</p>
+    </section>
+
+    <p class="home-note">A zip can hold <code>.cpp</code>, <code>.cc</code> and <code>.cxx</code> files in any folder. A file’s batch input is read from <code>input/&lt;file name&gt;.txt</code>, the same layout Export zip produces.</p>
+  </div>
+</section>
+<input type="file" id="zip-input" accept=".zip,application/zip" hidden>
+
+<section id="recordings" aria-labelledby="recs-title">
+  <div class="recs">
+    <div class="credits-top">
+      <h1 id="recs-title" tabindex="-1">Recordings</h1>
+      <a class="back" href="#" id="recs-back">Back</a>
+    </div>
+    <p class="lede">A recording replays every file and content change in a workspace or room, by everyone in it, with their cursors and selections. Recordings are kept in this browser; download one to share it or keep a copy.</p>
+    <div class="recs-actions">
+      <button type="button" class="btn" id="rec-open">Open a .cpprec file</button>
+      <span class="recs-hint">or drop one on this page</span>
+    </div>
+    <p class="home-msg" id="recs-msg" aria-live="polite"></p>
+    <ul class="rec-list" id="rec-list"></ul>
+    <p class="recs-empty" id="recs-empty" hidden>No recordings yet. Press <strong>Record</strong> in the editor to start one.</p>
+  </div>
+</section>
+<input type="file" id="rec-input" accept=".cpprec" hidden>
+
+<section id="player" aria-labelledby="player-title">
+  <div class="player-top">
+    <div class="player-heading">
+      <a class="back" href="#recordings">← Recordings</a>
+      <h1 id="player-title" tabindex="-1"></h1>
+      <span class="player-meta" id="player-meta"></span>
+    </div>
+    <div class="player-top-actions">
+      <button type="button" class="btn" id="player-zip" title="Download the files as they are at this point, as a zip">Files at this point</button>
+      <button type="button" class="btn" id="player-download">Download recording</button>
+    </div>
+  </div>
+  <div class="player-body">
+    <aside class="pane player-side">
+      <div class="pane-head"><h2>Files</h2></div>
+      <ul id="player-files" class="player-files"></ul>
+    </aside>
+    <section class="pane player-editor">
+      <div class="pane-head">
+        <h2 id="player-file">main.cpp</h2>
+        <label class="follow"><input type="checkbox" id="player-follow" checked> Follow changes</label>
+      </div>
+      <div id="player-cm"></div>
+    </section>
+    <aside class="pane player-side">
+      <div class="pane-head"><h2>People</h2></div>
+      <ul id="player-people" class="collab-people player-people"></ul>
+      <div class="pane-head sub"><h2>Input</h2></div>
+      <pre id="player-input" class="player-input"></pre>
+    </aside>
+  </div>
+  <div class="player-controls">
+    <button type="button" class="btn primary" id="player-play">Play</button>
+    <span class="player-time" id="player-time">0:00 / 0:00</span>
+    <div class="scrub">
+      <canvas id="player-heat" aria-hidden="true"></canvas>
+      <input type="range" id="player-scrub" min="0" max="1000" value="0" aria-label="Position in the recording">
+    </div>
+    <label class="speed">Speed
+      <select id="player-speed">
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="2">2×</option>
+        <option value="4">4×</option>
+        <option value="8">8×</option>
+        <option value="16">16×</option>
+      </select>
+    </label>
+    <label class="follow" title="Shorten pauses longer than 1.5 seconds"><input type="checkbox" id="player-skip" checked> Skip pauses</label>
+  </div>
+</section>
+
+<section id="credits" aria-labelledby="credits-title">
+  <div class="credits">
+    <div class="credits-top">
+      <h1 id="credits-title" tabindex="-1">Credits</h1>
+      <a class="back" href="#" id="credits-back">Back</a>
+    </div>
+    <p class="lede">cpp.wasm is a thin layer over other people’s work. These are the projects that make compiling and running C++ in a browser tab possible.</p>
+
+    <h2>Compiler and runtime</h2>
+      <div class="credit">
+        <div><a class="name" href="https://github.com/binji/wasm-clang" target="_blank" rel="noopener">wasm-clang</a> <span class="by">by Ben Smith (binji)</span></div>
+        <span class="license">Apache 2.0</span>
+        <p>The prebuilt Clang, wasm-ld, in-memory file system and sysroot this app downloads. Ben originally published them on binji.github.io; cpp.wasm loads copies from <code>src/vendors/wasm-clang/</code> on its own server. The worker’s WASI host, file-system glue and tar reader are adapted from its <code>shared.js</code>. Ben presented the project at CppCon 2019.</p>
+      </div>
+      <div class="credit">
+        <div><a class="name" href="https://github.com/binji/llvm-project" target="_blank" rel="noopener">memfs</a> <span class="by">by Ben Smith, in his LLVM fork</span></div>
+        <span class="license">Apache 2.0</span>
+        <p>The in-memory file system, itself compiled to WebAssembly, that holds your source file, the standard headers and the build output while clang and wasm-ld run.</p>
+      </div>
+      <div class="credit">
+        <div><a class="name" href="https://llvm.org" target="_blank" rel="noopener">Clang and LLD 8.0.1</a> <span class="by">by the LLVM project</span></div>
+        <span class="license">UIUC (NCSA)</span>
+        <p>The C++ compiler and the WebAssembly linker. Both run here as WebAssembly programs themselves.</p>
+      </div>
+      <div class="credit">
+        <div><a class="name" href="https://libcxx.llvm.org" target="_blank" rel="noopener">libc++ and libc++abi</a> <span class="by">by the LLVM project</span></div>
+        <span class="license">MIT or UIUC</span>
+        <p>The C++ standard library your programs link against: containers, algorithms, iostreams and the rest.</p>
+      </div>
+      <div class="credit">
+        <div><a class="name" href="https://github.com/WebAssembly/wasi-libc" target="_blank" rel="noopener">wasi-libc</a> <span class="by">by the WebAssembly community, based on musl by Rich Felker and contributors</span></div>
+        <span class="license">Apache 2.0 / MIT</span>
+        <p>The C library underneath libc++. It turns calls like <code>printf</code> and <code>scanf</code> into WASI system calls that the page answers.</p>
+      </div>
+
+    <h2>Editor and type</h2>
+      <div class="credit">
+        <div><a class="name" href="https://github.com/wasm-fmt/clang-format" target="_blank" rel="noopener">clang-format (wasm-fmt)</a> <span class="by">by magic-akari, built from LLVM’s clang-format</span></div>
+        <span class="license">MIT / Apache 2.0</span>
+        <p>Powers the Format button. LLVM’s clang-format compiled to WebAssembly, loaded from <code>src/vendors/clang-format/</code> the first time you format.</p>
+      </div>
+      <div class="credit">
+        <div><a class="name" href="https://codemirror.net/5/" target="_blank" rel="noopener">CodeMirror 5</a> <span class="by">by Marijn Haverbeke and contributors</span></div>
+        <span class="license">MIT</span>
+        <p>The code editor, with C++ highlighting, bracket matching and auto-closing brackets. Bundled in <code>src/vendors/codemirror/</code>.</p>
+      </div>
+      <div class="credit">
+        <div><a class="name" href="https://github.com/IBM/plex" target="_blank" rel="noopener">IBM Plex Sans and Plex Mono</a> <span class="by">by Mike Abbink and Bold Monday for IBM</span></div>
+        <span class="license">SIL OFL 1.1</span>
+        <p>The interface and code typefaces, bundled in <code>src/vendors/ibm-plex/</code> from Fontsource.</p>
+      </div>
+
+    <h2>Collaboration</h2>
+      <div class="credit">
+        <div><a class="name" href="https://github.com/yjs/yjs" target="_blank" rel="noopener">Yjs, y-codemirror and y-protocols</a> <span class="by">by Kevin Jahns and contributors</span></div>
+        <span class="license">MIT</span>
+        <p>The shared documents behind rooms: edits from everyone merge without conflicts, and other people’s cursors show in the editor.</p>
+      </div>
+      <div class="credit">
+        <div><a class="name" href="https://github.com/dmotz/trystero" target="_blank" rel="noopener">Trystero</a> <span class="by">by Dan Motzenbecker and contributors</span></div>
+        <span class="license">MIT</span>
+        <p>Connects the browsers in a room directly over WebRTC, finding each other through public Nostr relays. Bundled with the libraries above in <code>src/vendors/collab/</code>.</p>
+      </div>
+
+    <h2>Hosting and files</h2>
+      <div class="credit">
+        <div><a class="name" href="https://github.com/101arrowz/fflate" target="_blank" rel="noopener">fflate 0.8.3</a> <span class="by">by Arjun Barrett</span></div>
+        <span class="license">MIT</span>
+        <p>Reads and writes the zip files for Import and Export. Bundled in <code>src/vendors/fflate/</code>.</p>
+      </div>
+      <div class="credit">
+        <div><a class="name" href="https://github.com/gzuidhof/coi-serviceworker" target="_blank" rel="noopener">coi-serviceworker</a> <span class="by">by Guido Zuidhof and contributors</span></div>
+        <span class="license">MIT</span>
+        <p>A small service worker that adds the cross-origin isolation headers interactive mode needs, on hosts like GitHub Pages that can’t send them.</p>
+      </div>
+
+    <h2>Ideas and fixes</h2>
+      <div class="credit">
+        <div><a class="name" href="https://github.com/EduOJ/wasm-clang" target="_blank" rel="noopener">EduOJ wasm-clang</a> <span class="by">by littlebear0729 and leoleoasd</span></div>
+        <span class="license">MIT / Apache 2.0</span>
+        <p>Their stdin work, proposed upstream in <a href="https://github.com/binji/wasm-clang/pull/6" target="_blank" rel="noopener">wasm-clang pull request 6</a>, was the starting point for how this app feeds the Input pane to your program.</p>
+      </div>
+
+    <p class="note">Code adapted from wasm-clang keeps its Apache 2.0 notice in <code>src/js/worker.js</code>. Each project above is distributed under its own license; follow the links for the full terms.</p>
+  </div>
+</section>
+
+<footer>
+  <div id="status" data-state="idle">Compiler not loaded yet</div>
+  <div class="links">
+  <a class="footer-link" href="#recordings">Recordings</a>
+  <a class="footer-link" href="#credits">Credits</a>
+  <details id="settings">
+    <summary>Toolchain source</summary>
+    <div class="popover">
+      <p>Clang 8, wasm-ld, the in-memory file system and the libc++ sysroot are fetched from this folder: by default <code>src/vendors/wasm-clang/</code> next to this page. It must contain the files <code>clang</code>, <code>lld</code>, <code>memfs</code> and <code>sysroot.tar</code>. A full URL to another server also works if that server allows cross-origin requests.</p>
+      <div class="row">
+        <input id="base-url" type="text" spellcheck="false" autocomplete="off" aria-label="Toolchain folder or URL">
+        <button type="button" id="base-default">Default</button>
+        <button type="button" class="primary" id="base-save">Save</button>
+      </div>
+      <p id="base-resolved" class="resolved"></p>
+    </div>
+  </details>
+  </div>
+</footer>
+
+<script src="src/vendors/codemirror/codemirror.js"></script>
+<script src="src/vendors/codemirror/mode/clike/clike.js"></script>
+<script src="src/vendors/codemirror/addon/edit/matchbrackets.js"></script>
+<script src="src/vendors/codemirror/addon/edit/closebrackets.js"></script>
+
+<script src="src/vendors/fflate/fflate.min.js"></script>
+<script src="src/vendors/collab/collab.bundle.js"></script>
+<script src="src/js/collab.js"></script>
+<script src="src/js/cpprec.js"></script>
+<script src="src/js/record.js"></script>
+<script src="src/js/app.js"></script>
+</body>
+</html>
