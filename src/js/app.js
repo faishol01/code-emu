@@ -1,0 +1,1201 @@
+/* cpp.wasm page script: editor, terminal, formatter and worker orchestration. */
+(function () {
+'use strict';
+
+// worker.js sits next to this script.
+const WORKER_URL = new URL('worker.js', document.currentScript.src).href;
+
+// The toolchain files sit next to this page, in src/vendors/wasm-clang/. The path is
+// relative so the site also works from a subfolder, like a GitHub Pages project site.
+const DEFAULT_BASE = 'src/vendors/wasm-clang/';
+const OLD_DEFAULT_BASES = ['https://binji.github.io/wasm-clang/', '/wasm-clang/', '/src/wasm-clang/', '/src/vendors/wasm-clang/'];
+// Resolve here so the worker gets a full URL (it would resolve relative paths against src/js/).
+const resolveBase = (b) => new URL(b, location.href).href;
+const $ = (s) => document.querySelector(s);
+
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+};
+
+/* ---------------- editor ---------------- */
+const fallback = $('#fallback-editor');
+let cm = null;
+const STARTER = `#include <iostream>
+#include <string>
+
+int main() {
+    std::string name;
+    std::cout << "What's your name? ";
+    std::getline(std::cin, name);
+    std::cout << "Hello, " << name << "!\\n";
+}
+`;
+const NEW_FILE_TEMPLATE = '#include <iostream>\n\nint main() {\n    \n}\n';
+
+if (window.CodeMirror) {
+  cm = CodeMirror.fromTextArea(fallback, {
+    mode: 'text/x-c++src',
+    lineNumbers: true,
+    indentUnit: 4,
+    tabSize: 4,
+    indentWithTabs: false,
+    matchBrackets: true,
+    autoCloseBrackets: true,
+    extraKeys: {
+      'Ctrl-Enter': () => runOrStop(),
+      'Cmd-Enter': () => runOrStop(),
+      Tab: (ed) => ed.somethingSelected() ? ed.indentSelection('add') : ed.replaceSelection('    ', 'end'),
+      'Shift-Tab': (ed) => ed.indentSelection('subtract'),
+      'Shift-Alt-F': () => formatCode(),
+    },
+  });
+  cm.on('change', (_, ch) => {
+    if (room.active) return;
+    if (ch.origin !== 'setValue') recordLocalEdit(ch);
+    const f = activeFile();
+    if (f) { f.code = cm.getValue(); saveFiles(); }
+  });
+  // Recording (local workspace; rooms are recorded from the shared document in collab.js).
+  // Positions are taken in beforeChange, when they are still exact for each change.
+  cm.on('beforeChange', (_, ch) => {
+    if (!rec.active || room.active || ch.origin === 'setValue') return;
+    const d = cm.getDoc();
+    pendingEdits.push({ ch, id: activeId, from: d.indexFromPos(ch.from), to: d.indexFromPos(ch.to) });
+  });
+  cm.on('cursorActivity', () => {
+    if (!rec.active || room.active || !activeId) return;
+    const d = cm.getDoc();
+    rec.cursor(activeId, d.indexFromPos(d.getCursor('anchor')), d.indexFromPos(d.getCursor('head')));
+  });
+} else {
+  fallback.addEventListener('input', () => { activeFile().code = fallback.value; saveFiles(); });
+  fallback.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const s = fallback.selectionStart;
+      fallback.setRangeText('    ', s, fallback.selectionEnd, 'end');
+      activeFile().code = fallback.value;
+      saveFiles();
+    }
+  });
+}
+const getCode = () => (cm ? cm.getValue() : fallback.value);
+const setCode = (v) => { if (cm) cm.setValue(v); else { fallback.value = v; activeFile().code = v; saveFiles(); } };
+
+/* ---------------- files ----------------
+   Each file is its own program: Run builds the file that is open. Files, with
+   their own batch input, are kept in this browser's localStorage. */
+const NAME_RE = /^[A-Za-z0-9_+-][A-Za-z0-9_.+-]{0,63}$/;
+const EXT_RE = /\.(cpp|cc|cxx|c\+\+)$/i;
+let files = [];
+let activeId = null;
+let workspaceActive = false;   // false until the visitor opens or creates a workspace
+// While in a collaboration room, collab.js fills in room.ops and the files come from the room.
+const room = { active: false, ops: null, route: null };
+// Filled in by record.js. While recording, app.js reports local changes to it.
+const rec = { active: false };
+const views = {};   // extra views (recordings, player) registered by record.js
+const pendingEdits = [];
+function recordLocalEdit(ch) {
+  let p = pendingEdits.shift();
+  while (p && p.ch.canceled) p = pendingEdits.shift();
+  if (p && rec.active) rec.code(p.id, p.from, p.to - p.from, ch.text.join('\n'));
+}
+// Smallest single replacement that turns a into b (for the batch input box).
+function diffStrings(a, b) {
+  let s = 0;
+  while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  let ea = a.length, eb = b.length;
+  while (ea > s && eb > s && a[ea - 1] === b[eb - 1]) { ea--; eb--; }
+  return { pos: s, del: ea - s, text: b.slice(s, eb) };
+}
+let lastEdited = 0;
+const docs = new Map();          // file id -> CodeMirror.Doc, so each file keeps its own undo history
+const newId = () => 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const activeFile = () => files.find((f) => f.id === activeId);
+
+(function loadFiles() {
+  let data = null;
+  try { data = JSON.parse(store.get('cppwasm.files', 'null')); } catch (e) {}
+  if (data && Array.isArray(data.files)) {
+    files = data.files.filter((f) => f && typeof f.id === 'string' && NAME_RE.test(f.name || ''))
+      .map((f) => ({ id: f.id, name: f.name, code: String(f.code || ''), stdin: String(f.stdin || '') }));
+    activeId = data.active;
+    lastEdited = Number(data.updated) || 0;
+  }
+  if (files.length) workspaceActive = true;
+  if (!files.length) {
+    // First visit, or upgrading from the single-file version.
+    const code = store.get('cppwasm.code', null);
+    files = [{ id: newId(), name: 'main.cpp', code: code !== null ? code : STARTER, stdin: store.get('cppwasm.stdin', '') }];
+    if (code !== null) workspaceActive = true;
+  }
+  if (!activeFile()) activeId = files[0].id;
+})();
+
+let saveTimer = 0;
+function flushSave() {
+  clearTimeout(saveTimer);
+  if (!workspaceActive || room.active) return;
+  lastEdited = Date.now();
+  store.set('cppwasm.files', JSON.stringify({ active: activeId, updated: lastEdited, files }));
+}
+function saveFiles() { clearTimeout(saveTimer); if (workspaceActive && !room.active) saveTimer = setTimeout(flushSave, 300); }
+window.addEventListener('pagehide', flushSave);
+
+const fileList = $('#file-list');
+const filesMsg = $('#files-msg');
+let msgTimer = 0;
+function filesMessage(text, ok) {
+  filesMsg.textContent = text;
+  filesMsg.className = 'files-msg' + (ok ? ' ok' : '');
+  clearTimeout(msgTimer);
+  if (text) msgTimer = setTimeout(() => { filesMsg.textContent = ''; }, 5000);
+}
+
+function openFile(id, focusEditor) {
+  if (room.active) { room.ops.open(id, focusEditor); return; }
+  const f = files.find((x) => x.id === id);
+  if (!f) return;
+  activeId = id;
+  if (cm) {
+    let doc = docs.get(id);
+    if (!doc) { doc = CodeMirror.Doc(f.code, 'text/x-c++src'); docs.set(id, doc); }
+    if (cm.getDoc() !== doc) cm.swapDoc(doc);
+    if (focusEditor) cm.focus();
+  } else {
+    fallback.value = f.code;
+    if (focusEditor) fallback.focus();
+  }
+  $('#stdin').value = f.stdin;
+  $('#file-title').textContent = f.name;
+  renderFiles();
+  saveFiles();
+}
+
+function checkName(raw, exceptId) {
+  let name = raw.trim();
+  if (!name) return { error: 'Enter a file name.' };
+  if (!name.includes('.')) name += '.cpp';
+  if (!NAME_RE.test(name)) return { error: 'Use letters, digits, and . _ - + only (up to 64 characters).' };
+  if (!EXT_RE.test(name)) return { error: 'File names must end in .cpp, .cc, .cxx or .c++.' };
+  if (files.some((f) => f.id !== exceptId && f.name.toLowerCase() === name.toLowerCase())) return { error: name + ' already exists.' };
+  return { name };
+}
+
+function uniqueName(base) {
+  return makeUnique(base + '.cpp', new Set(files.map((f) => f.name.toLowerCase())));
+}
+// "a.cpp" -> "a-2.cpp", "a-3.cpp", ... until the (lower-cased) name is free; records it as taken.
+function makeUnique(name, taken) {
+  const dot = name.lastIndexOf('.');
+  const stem = name.slice(0, dot), ext = name.slice(dot);
+  let out = name;
+  for (let i = 2; taken.has(out.toLowerCase()); i++) out = stem + '-' + i + ext;
+  taken.add(out.toLowerCase());
+  return out;
+}
+
+const ICON_EDIT = '<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2.5l2 2L5 11H3V9z"/></svg>';
+const ICON_DELETE = '<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3 4h8M5.5 4V2.5h3V4M4.5 4l.5 7.5h4l.5-7.5"/></svg>';
+
+let lastFileClick = { id: null, t: 0 };
+// An open rename box survives re-renders (in a room, other people's edits re-render the list).
+let renaming = null;   // { id, value, sel: [start, end] | null, fresh }
+let rerendering = false;
+function renderFiles(startRenameId) {
+  if (startRenameId) renaming = { id: startRenameId, value: null, sel: null, fresh: true };
+  if (renaming && !files.some((f) => f.id === renaming.id)) renaming = null;
+  const prev = fileList.querySelector('.rename-input');
+  if (renaming && prev && document.activeElement === prev) renaming.sel = [prev.selectionStart, prev.selectionEnd];
+  let renameInput = null;
+  rerendering = true;
+  fileList.textContent = '';
+  rerendering = false;
+  for (const f of files) {
+    const li = document.createElement('li');
+    li.className = 'file-item' + (f.id === activeId ? ' active' : '');
+    if (renaming && f.id === renaming.id) {
+      const input = document.createElement('input');
+      input.className = 'rename-input';
+      input.value = renaming.value !== null ? renaming.value : f.name;
+      input.addEventListener('input', () => { if (renaming) renaming.value = input.value; });
+      input.spellcheck = false;
+      input.setAttribute('aria-label', 'File name');
+      let done = false;
+      const finish = (commit, fromBlur) => {
+        if (done || (fromBlur && rerendering)) return;
+        if (commit) {
+          const r = checkName(input.value, f.id);
+          if (r.error && !fromBlur) { filesMessage(r.error); input.focus(); return; }
+          if (r.error) { done = true; renaming = null; renderFiles(); filesMessage(r.error + ' Kept ' + f.name + '.'); return; }
+          if (room.active) room.ops.rename(f.id, r.name);
+          else { if (rec.active && r.name !== f.name) rec.rename(f.id, r.name); f.name = r.name; saveFiles(); }
+          if (f.id === activeId) $('#file-title').textContent = r.name;
+        }
+        done = true;
+        renaming = null;
+        filesMessage('');
+        renderFiles();
+        if (commit && cm && f.id === activeId) cm.focus();
+      };
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+      });
+      input.addEventListener('blur', () => finish(true, true));
+      li.appendChild(input);
+      fileList.appendChild(li);
+      renameInput = input;
+      continue;
+    }
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'open';
+    open.textContent = f.name;
+    open.title = f.name + ' (F2 to rename)';
+    if (f.id === activeId) open.setAttribute('aria-current', 'true');
+    // The list re-renders on open, so a double-click is detected by hand.
+    open.addEventListener('click', () => {
+      const now = Date.now();
+      const twice = lastFileClick.id === f.id && now - lastFileClick.t < 450;
+      lastFileClick = { id: f.id, t: now };
+      if (twice) renderFiles(f.id);
+      else if (f.id !== activeId) openFile(f.id, true);
+      else if (cm) cm.focus();
+    });
+    open.addEventListener('keydown', (e) => { if (e.key === 'F2') { e.preventDefault(); renderFiles(f.id); } });
+
+    const ren = document.createElement('button');
+    ren.type = 'button';
+    ren.className = 'act';
+    ren.title = 'Rename ' + f.name;
+    ren.setAttribute('aria-label', 'Rename ' + f.name);
+    ren.innerHTML = ICON_EDIT;
+    ren.addEventListener('click', () => renderFiles(f.id));
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'act del';
+    del.title = files.length > 1 ? 'Delete ' + f.name : 'Keep at least one file';
+    del.setAttribute('aria-label', 'Delete ' + f.name);
+    del.innerHTML = ICON_DELETE;
+    del.disabled = files.length < 2;
+    del.addEventListener('click', () => deleteFile(f.id));
+
+    li.append(open);
+    if (room.active) {
+      const who = room.ops.viewers(f.id);
+      if (who.length) {
+        const dots = document.createElement('span');
+        dots.className = 'viewers';
+        dots.title = who.map((u) => u.name).join(', ') + ' here';
+        for (const u of who.slice(0, 4)) {
+          const d = document.createElement('span');
+          d.className = 'dot';
+          d.style.background = u.color;
+          dots.appendChild(d);
+        }
+        li.appendChild(dots);
+      }
+    }
+    li.append(ren, del);
+    fileList.appendChild(li);
+  }
+  if (renameInput) {
+    renameInput.focus();
+    if (renaming.fresh || !renaming.sel) {
+      const dot = renameInput.value.lastIndexOf('.');
+      renameInput.setSelectionRange(0, dot > 0 ? dot : renameInput.value.length);
+    } else {
+      renameInput.setSelectionRange(renaming.sel[0], renaming.sel[1]);
+    }
+    renaming.fresh = false;
+  }
+}
+
+function newFile() {
+  let id;
+  if (room.active) {
+    [id] = room.ops.addFiles([{ name: uniqueName('untitled'), code: NEW_FILE_TEMPLATE, stdin: '' }]);
+    files = files.concat([{ id, name: '', code: NEW_FILE_TEMPLATE, stdin: '' }]);   // refreshed from the room right after
+  } else {
+    id = newId();
+    files.push({ id, name: uniqueName('untitled'), code: NEW_FILE_TEMPLATE, stdin: '' });
+    if (rec.active) rec.add(files[files.length - 1]);
+  }
+  openFile(id);
+  if (cm) cm.setCursor({ line: 3, ch: 4 });
+  if (room.active) queueMicrotask(() => renderFiles(id));
+  else renderFiles(id);   // start with the name ready to type over
+}
+
+function deleteFile(id) {
+  const f = files.find((x) => x.id === id);
+  if (!f || files.length < 2) return;
+  if (!window.confirm('Delete ' + f.name + '?' + (room.active ? ' It will be deleted for everyone in the room.' : ' This can’t be undone.'))) return;
+  if (room.active) { room.ops.remove(id); return; }
+  if (rec.active) rec.remove(id);
+  const i = files.indexOf(f);
+  files.splice(i, 1);
+  docs.delete(id);
+  if (activeId === id) openFile(files[Math.min(i, files.length - 1)].id);
+  else { renderFiles(); saveFiles(); }
+}
+
+$('#new-file').addEventListener('click', newFile);
+
+/* ---------------- zip import / export ----------------
+   Layout: every source file at the top level, plus input/<file name>.txt for
+   files that have batch input. Import accepts C++ files from any folder. */
+const ZIP_MAX_BYTES = 20 * 1024 * 1024;
+const ZIP_MAX_FILES = 200;
+const SOURCE_MAX_BYTES = 1024 * 1024;
+
+function exportZip() {
+  if (!window.fflate) { filesMessage('Zip support didn’t load.'); return; }
+  const entries = {};
+  for (const f of files) {
+    entries[f.name] = fflate.strToU8(f.code);
+    if (f.stdin) entries['input/' + f.name + '.txt'] = fflate.strToU8(f.stdin);
+  }
+  const data = fflate.zipSync(entries, { level: 6, mtime: new Date() });
+  const url = URL.createObjectURL(new Blob([data], { type: 'application/zip' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'cpp-wasm-workspace-' + new Date().toISOString().slice(0, 10) + '.zip';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function decodeText(bytes) {
+  return fflate.strFromU8(bytes).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+}
+
+function safeName(base) {
+  const dot = base.lastIndexOf('.');
+  let stem = base.slice(0, dot).replace(/[^A-Za-z0-9_.+-]/g, '_').replace(/^[._]+/, '') || 'file';
+  const ext = base.slice(dot).toLowerCase();
+  stem = stem.slice(0, 64 - ext.length);
+  return stem + ext;
+}
+
+// Reads a zip File into new file records. Names are made unique against `taken`.
+async function readZip(file, taken) {
+  if (!window.fflate) throw new Error('Zip support didn’t load.');
+  if (file.size > ZIP_MAX_BYTES) throw new Error(file.name + ' is larger than 20 MB.');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let tooBig = 0;
+  let entries;
+  try {
+    entries = fflate.unzipSync(bytes, {
+      filter: (info) => {
+        if (info.name.endsWith('/')) return false;
+        if (info.originalSize > SOURCE_MAX_BYTES * 2) { tooBig++; return false; }
+        return true;
+      },
+    });
+  } catch (e) {
+    throw new Error(file.name + ' couldn’t be read as a zip file.');
+  }
+  const sources = [], inputs = new Map();
+  let skipped = 0;
+  for (const [path, data] of Object.entries(entries)) {
+    const parts = path.split('/');
+    if (parts.some((p) => p.startsWith('.') || p === '__MACOSX')) continue;
+    const input = path.match(/(?:^|\/)input\/([^/]+)\.txt$/i);
+    if (input) { inputs.set(input[1].toLowerCase(), decodeText(data)); continue; }
+    const base = parts[parts.length - 1];
+    if (!EXT_RE.test(base)) { skipped++; continue; }
+    if (data.length > SOURCE_MAX_BYTES) { tooBig++; continue; }
+    sources.push({ path, base, code: decodeText(data) });
+  }
+  if (!sources.length) throw new Error('No C++ files (.cpp, .cc, .cxx) were found in ' + file.name + '.');
+  sources.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true }));
+  const extra = Math.max(0, sources.length - ZIP_MAX_FILES);
+  const result = sources.slice(0, ZIP_MAX_FILES).map((src) => ({
+    id: newId(),
+    name: makeUnique(safeName(src.base), taken),
+    code: src.code,
+    stdin: inputs.get(src.base.toLowerCase()) || '',
+  }));
+  const notes = [];
+  if (skipped) notes.push(skipped + ' other file' + (skipped > 1 ? 's' : '') + ' skipped');
+  if (tooBig) notes.push(tooBig + ' over 1 MB skipped');
+  if (extra) notes.push(extra + ' over the ' + ZIP_MAX_FILES + '-file limit skipped');
+  return { files: result, notes };
+}
+
+function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
+
+// Adds a zip's files to the current workspace.
+async function importIntoWorkspace(file) {
+  try {
+    const { files: added, notes } = await readZip(file, new Set(files.map((f) => f.name.toLowerCase())));
+    if (room.active) {
+      const ids = room.ops.addFiles(added);
+      queueMicrotask(() => openFile(ids[0]));
+    } else {
+      files.push(...added);
+      if (rec.active) added.forEach((f) => rec.add(f));
+      openFile(added[0].id);
+      flushSave();
+    }
+    filesMessage('Imported ' + plural(added.length, 'file') + (notes.length ? ' (' + notes.join(', ') + ')' : '') + '.', true);
+  } catch (e) {
+    filesMessage(e.message);
+  }
+}
+
+// Replaces the whole workspace (used by the home page).
+function startWorkspace(newFiles) {
+  if (rec.active) rec.stop('workspace');
+  files = newFiles;
+  docs.clear();
+  workspaceActive = true;
+  openFile(files[0].id);
+  flushSave();
+  go('workspace');
+}
+
+const zipInput = $('#zip-input');
+let zipTarget = 'workspace';
+function chooseZip(target) { zipTarget = target; zipInput.value = ''; zipInput.click(); }
+zipInput.addEventListener('change', () => {
+  const file = zipInput.files[0];
+  if (!file) return;
+  if (zipTarget === 'home') importFromHome(file); else importIntoWorkspace(file);
+});
+$('#import-zip').addEventListener('click', () => chooseZip('workspace'));
+$('#export-zip').addEventListener('click', exportZip);
+
+function dropTarget(el, onFile) {
+  const isFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+  el.addEventListener('dragover', (e) => { if (!isFiles(e)) return; e.preventDefault(); el.classList.add('dragging'); });
+  el.addEventListener('dragleave', (e) => { if (!el.contains(e.relatedTarget)) el.classList.remove('dragging'); });
+  el.addEventListener('drop', (e) => {
+    if (!isFiles(e)) return;
+    e.preventDefault();
+    el.classList.remove('dragging');
+    const file = e.dataTransfer.files[0];
+    if (file) onFile(file);
+  });
+}
+dropTarget($('#files'), importIntoWorkspace);
+$('#stdin').addEventListener('input', (e) => {
+  if (room.active) { room.ops.setStdin(activeId, e.target.value); return; }
+  if (rec.active) { const d = diffStrings(activeFile().stdin, e.target.value); rec.input(activeId, d.pos, d.del, d.text); }
+  activeFile().stdin = e.target.value;
+  saveFiles();
+});
+
+// Show / hide the file list.
+const toggleFiles = $('#toggle-files');
+function setFilesHidden(hidden) {
+  document.body.classList.toggle('files-hidden', hidden);
+  toggleFiles.setAttribute('aria-expanded', String(!hidden));
+  store.set('cppwasm.filesHidden', hidden ? '1' : '0');
+  if (cm) cm.refresh();
+}
+toggleFiles.addEventListener('click', () => setFilesHidden(!document.body.classList.contains('files-hidden')));
+setFilesHidden(store.get('cppwasm.filesHidden', window.matchMedia('(max-width: 820px)').matches ? '1' : '0') === '1');
+
+openFile(activeId);
+
+/* ---------------- format (clang-format, loaded on first use) ---------------- */
+const FORMAT_STYLE = JSON.stringify({
+  BasedOnStyle: 'LLVM',
+  IndentWidth: 4,
+  ColumnLimit: 100,
+  AccessModifierOffset: -4,
+});
+// The formatter sits next to this page, in src/vendors/clang-format/.
+const FORMATTER_DIR = 'src/vendors/clang-format/';
+let formatterPromise = null;
+let noteTimer = 0;
+function note(text, bad) {
+  const el = $('#format-note');
+  el.textContent = text;
+  el.className = 'notice' + (bad ? ' bad' : '');
+  clearTimeout(noteTimer);
+  if (text) noteTimer = setTimeout(() => { el.textContent = ''; }, bad ? 8000 : 2500);
+}
+function loadFormatter() {
+  if (!formatterPromise) {
+    const url = new URL(FORMATTER_DIR + 'clang-format-web.js', location.href).href;
+    formatterPromise = import(url).then(async (mod) => { await mod.default(); return mod; });
+    formatterPromise.catch(() => { formatterPromise = null; });
+  }
+  return formatterPromise;
+}
+async function formatCode() {
+  const btn = $('#format');
+  if (btn.disabled || !activeFile()) return;
+  btn.disabled = true;
+  if (!formatterPromise) note('Loading formatter…');
+  try {
+    const mod = await loadFormatter();
+    const src = getCode();
+    const result = mod.format(src, activeFile().name, FORMAT_STYLE);
+    if (result === src) { note('Already formatted'); return; }
+    if (cm) {
+      const cur = cm.getCursor();
+      const scroll = cm.getScrollInfo();
+      cm.operation(() => {
+        const last = cm.lastLine();
+        cm.replaceRange(result, { line: 0, ch: 0 }, { line: last, ch: cm.getLine(last).length });
+        cm.setCursor({ line: Math.min(cur.line, cm.lastLine()), ch: cur.ch });
+      });
+      cm.scrollTo(scroll.left, scroll.top);
+    } else {
+      setCode(result);
+    }
+    note('Formatted');
+  } catch (e) {
+    let where = '';
+    try { where = new URL(FORMATTER_DIR, location.href).href; } catch (_) {}
+    note('Formatter not found at ' + (where || 'the toolchain folder'), true);
+    console.error(e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+$('#format').addEventListener('click', formatCode);
+
+/* ---------------- output ---------------- */
+const out = $('#output');
+const OUT_CAP = 300000;
+let outChars = 0, capped = false;
+let queue = [], scheduled = false;
+const ansi = { fg: null, bold: false, pending: '' };
+const COLORS = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
+
+function clearOutput() {
+  out.textContent = '';
+  outChars = 0; capped = false; queue = [];
+  ansi.fg = null; ansi.bold = false; ansi.pending = '';
+}
+function sys(text, tone) { queue.push({ sys: true, text, tone }); schedule(); }
+function write(text, cls) { queue.push({ text, cls }); schedule(); }
+function schedule() { if (!scheduled) { scheduled = true; requestAnimationFrame(flush); } }
+
+function span(text, cls) {
+  if (!text || capped) return;
+  if (outChars + text.length > OUT_CAP) {
+    text = text.slice(0, Math.max(0, OUT_CAP - outChars));
+    capped = true;
+  }
+  outChars += text.length;
+  const el = document.createElement('span');
+  const classes = [cls];
+  if (ansi.bold) classes.push('b');
+  if (ansi.fg) classes.push('c-' + ansi.fg);
+  el.className = classes.join(' ');
+  el.textContent = text;
+  out.appendChild(el);
+  if (capped) {
+    const note = document.createElement('span');
+    note.className = 'o-sys';
+    note.textContent = '\nDisplay limit reached; later output is not shown.\n';
+    out.appendChild(note);
+  }
+}
+
+function applySgr(codes) {
+  const list = codes === '' ? [0] : codes.split(';').map(Number);
+  for (const c of list) {
+    if (c === 0) { ansi.fg = null; ansi.bold = false; }
+    else if (c === 1) ansi.bold = true;
+    else if (c === 22) ansi.bold = false;
+    else if (c === 39) ansi.fg = null;
+    else if (c >= 30 && c <= 37) ansi.fg = COLORS[c - 30];
+    else if (c >= 90 && c <= 97) ansi.fg = COLORS[c - 90];
+  }
+}
+
+function writeAnsi(text, cls) {
+  text = ansi.pending + text;
+  ansi.pending = '';
+  const esc = text.lastIndexOf('\x1b');
+  if (esc !== -1 && text.length - esc < 16 && !/^\x1b\[[0-9;]*m/.test(text.slice(esc))) {
+    ansi.pending = text.slice(esc);
+    text = text.slice(0, esc);
+  }
+  const re = /\x1b\[([0-9;]*)m/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    span(text.slice(last, m.index), cls);
+    applySgr(m[1]);
+    last = re.lastIndex;
+  }
+  span(text.slice(last), cls);
+}
+
+function flush() {
+  scheduled = false;
+  const hint = out.querySelector('.empty');
+  if (hint && queue.length) hint.remove();
+  const nearBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 40;
+  for (const item of queue) {
+    if (item.sys) {
+      if (out.lastChild && !/\n$/.test(out.lastChild.textContent)) {
+        out.appendChild(document.createTextNode('\n'));
+      }
+      const el = document.createElement('span');
+      el.className = 'o-sys' + (item.tone ? ' ' + item.tone : '');
+      el.textContent = item.text + '\n';
+      out.appendChild(el);
+    } else {
+      writeAnsi(item.text, item.cls);
+    }
+  }
+  queue = [];
+  if (nearBottom) out.scrollTop = out.scrollHeight;
+}
+
+$('#clear').addEventListener('click', clearOutput);
+
+/* ---------------- input mode ---------------- */
+const canInteract = !!(window.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
+let mode = store.get('cppwasm.inputMode', 'batch');
+if (!canInteract) mode = 'batch';
+const termRow = $('#term-row');
+const termInput = $('#term-input');
+const termEof = $('#term-eof');
+
+function setMode(m) {
+  if (running) return;
+  mode = m === 'interactive' && canInteract ? 'interactive' : 'batch';
+  if (canInteract) store.set('cppwasm.inputMode', mode);
+  document.body.classList.toggle('mode-interactive', mode === 'interactive');
+  $('#mode-interactive').setAttribute('aria-pressed', String(mode === 'interactive'));
+  $('#mode-batch').setAttribute('aria-pressed', String(mode === 'batch'));
+  $('#out-title').textContent = mode === 'interactive' ? 'Terminal' : 'Output';
+}
+if (!canInteract) {
+  const b = $('#mode-interactive');
+  b.disabled = true;
+  b.title = 'Needs a cross-origin isolated page: serve it with the COOP and COEP headers (see README).';
+  $('#batch-hint').textContent = 'Sent all at once before the program starts. Interactive mode needs the COOP/COEP server headers.';
+}
+$('#mode-interactive').addEventListener('click', () => setMode('interactive'));
+$('#mode-batch').addEventListener('click', () => setMode('batch'));
+$('#mode-interactive').title = $('#mode-interactive').title || 'Type input while the program runs';
+$('#mode-batch').title = 'Give all input up front in the Input pane';
+
+// Shared with the worker: [state, length] as Int32, then up to 64 KB of input bytes.
+const STDIN_CAP = 65536;
+const stdinSab = canInteract ? new SharedArrayBuffer(8 + STDIN_CAP) : null;
+const stdinCtrl = stdinSab ? new Int32Array(stdinSab, 0, 2) : null;
+const stdinData = stdinSab ? new Uint8Array(stdinSab, 8) : null;
+const te = new TextEncoder();
+let inputQueue = [];      // Uint8Array chunks typed but not yet read
+let eofQueued = false;
+let waitingForInput = false;
+const inputHistory = [];
+let historyPos = 0;
+
+function resetTerminal(active) {
+  inputQueue = []; eofQueued = false; waitingForInput = false;
+  termInput.disabled = !active;
+  termEof.disabled = !active;
+  termRow.classList.remove('waiting');
+  termInput.placeholder = active ? 'Type ahead; sent when the program reads input' : 'Run the program to type input';
+  if (!active) termInput.value = '';
+}
+
+/* ---------------- run time limit ---------------- */
+// A program may run for 10 seconds. In interactive mode the clock pauses while
+// the program waits for you to type, so only its own running time counts.
+const TIME_LIMIT_MS = 10000;
+const runClock = { used: 0, since: 0, timer: 0 };
+function clockResume() {
+  if (runClock.timer) return;
+  runClock.since = performance.now();
+  runClock.timer = setTimeout(onTimeLimit, Math.max(0, TIME_LIMIT_MS - runClock.used));
+}
+function clockPause() {
+  if (!runClock.timer) return;
+  clearTimeout(runClock.timer);
+  runClock.timer = 0;
+  runClock.used += performance.now() - runClock.since;
+}
+function clockStart() { clockStop(); runClock.used = 0; clockResume(); }
+function clockStop() { clearTimeout(runClock.timer); runClock.timer = 0; }
+function onTimeLimit() {
+  runClock.timer = 0;
+  if (!running || current !== 'run') return;
+  if (worker) { worker.terminate(); worker = null; }
+  setStep('run', 'fail', '> ' + TIME_LIMIT_MS / 1000 + ' s');
+  sys('Time limit exceeded: the program ran for more than ' + TIME_LIMIT_MS / 1000 + ' seconds and was stopped.', 'bad');
+  finishRun();
+  spawn(); // keep a warm worker for the next run
+}
+
+function deliver() {
+  const wasWaiting = waitingForInput;
+  let n;
+  if (inputQueue.length) {
+    let chunk = inputQueue[0];
+    if (chunk.length > STDIN_CAP) { inputQueue[0] = chunk.subarray(STDIN_CAP); chunk = chunk.subarray(0, STDIN_CAP); }
+    else inputQueue.shift();
+    stdinData.set(chunk);
+    n = chunk.length;
+  } else if (eofQueued) {
+    n = -1;
+  } else {
+    return false;
+  }
+  Atomics.store(stdinCtrl, 1, n);
+  Atomics.store(stdinCtrl, 0, 1);
+  Atomics.notify(stdinCtrl, 0);
+  waitingForInput = false;
+  if (wasWaiting) clockResume();
+  termRow.classList.remove('waiting');
+  termInput.placeholder = 'Type ahead; sent when the program reads input';
+  return true;
+}
+
+function onStdinRequest() {
+  if (deliver()) return;
+  waitingForInput = true;
+  clockPause();
+  termRow.classList.add('waiting');
+  termInput.placeholder = 'The program is waiting for input';
+  if (document.activeElement !== termInput && !(cm && cm.hasFocus())) termInput.focus();
+}
+
+function sendLine(text) {
+  if (!running || mode !== 'interactive' || eofQueued) return;
+  write(text + '\n', 'o-in');
+  inputQueue.push(te.encode(text + '\n'));
+  if (text) inputHistory.push(text);
+  historyPos = inputHistory.length;
+  if (waitingForInput) deliver();
+}
+
+function sendEof() {
+  if (!running || mode !== 'interactive' || eofQueued) return;
+  if (termInput.value) { sendLine(termInput.value); termInput.value = ''; }
+  eofQueued = true;
+  sys('End of input sent.');
+  termInput.disabled = true;
+  termEof.disabled = true;
+  if (waitingForInput) deliver();
+}
+
+termInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault();
+    sendLine(termInput.value);
+    termInput.value = '';
+  } else if (e.key.toLowerCase() === 'd' && e.ctrlKey) {
+    e.preventDefault();
+    sendEof();
+  } else if (e.key === 'ArrowUp' && inputHistory.length) {
+    e.preventDefault();
+    historyPos = Math.max(0, historyPos - 1);
+    termInput.value = inputHistory[historyPos];
+  } else if (e.key === 'ArrowDown' && inputHistory.length) {
+    e.preventDefault();
+    historyPos = Math.min(inputHistory.length, historyPos + 1);
+    termInput.value = inputHistory[historyPos] || '';
+  }
+});
+termInput.addEventListener('paste', (e) => {
+  const text = (e.clipboardData || window.clipboardData).getData('text');
+  if (!/\r?\n/.test(text)) return;
+  e.preventDefault();
+  const start = termInput.selectionStart, end = termInput.selectionEnd;
+  const combined = termInput.value.slice(0, start) + text + termInput.value.slice(end);
+  const lines = combined.split(/\r?\n/);
+  termInput.value = lines.pop();
+  for (const line of lines) sendLine(line);
+});
+termEof.addEventListener('click', () => { sendEof(); termInput.focus(); });
+$('#output').addEventListener('click', () => {
+  if (mode === 'interactive' && !termInput.disabled && !window.getSelection().toString()) termInput.focus();
+});
+
+/* ---------------- pipeline + status ---------------- */
+const steps = {};
+document.querySelectorAll('.step').forEach((el) => { steps[el.dataset.step] = el; });
+function setStep(name, state, time) {
+  const el = steps[name];
+  el.classList.remove('active', 'done', 'fail');
+  if (state) el.classList.add(state);
+  if (time !== undefined) el.querySelector('.time').textContent = time;
+}
+const fmt = (ms) => (ms < 1000 ? Math.round(ms) + ' ms' : (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + ' s');
+const statusEl = $('#status');
+function status(text, state) { statusEl.textContent = text; statusEl.dataset.state = state; }
+
+/* ---------------- worker orchestration ---------------- */
+let base = store.get('cppwasm.base', DEFAULT_BASE);
+if (OLD_DEFAULT_BASES.includes(base)) { base = DEFAULT_BASE; store.set('cppwasm.base', base); }
+let worker = null;
+let toolchain = 'idle';   // idle | loading | ready | error
+let running = false;
+let current = null;       // stage currently running
+const modCache = {};
+let progress = {};
+
+function spawn() {
+  let absBase;
+  try { absBase = resolveBase(base); } catch (e) { absBase = ''; }
+  if (!/^https?:/.test(absBase)) {
+    toolchain = 'error';
+    setStep('toolchain', 'fail', 'failed');
+    status('The compiler could not be loaded', 'error');
+    sys(location.protocol === 'file:'
+      ? 'This page was opened from a file, so ' + base + ' has no web server to load from. Serve the page over http(s) with the toolchain in src/vendors/wasm-clang/, or enter a full URL under “Toolchain source”.'
+      : 'The toolchain source “' + base + '” isn’t a valid address. Fix it under “Toolchain source”.', 'bad');
+    return false;
+  }
+  try {
+    worker = new Worker(WORKER_URL);
+  } catch (e) {
+    toolchain = 'error';
+    status('This browser blocked the background worker. Serve the page over http(s) and try again.', 'error');
+    return false;
+  }
+  worker.onmessage = onMessage;
+  worker.onerror = (e) => {
+    sys('Worker error: ' + (e.message || 'unknown'), 'bad');
+    finishRun();
+  };
+  const haveAll = ['memfs', 'sysroot.tar', 'clang', 'lld'].every((k) => modCache[k]);
+  progress = {};
+  if (!haveAll) {
+    toolchain = 'loading';
+    setStep('toolchain', 'active', '');
+    status('Downloading the compiler…', 'loading');
+  }
+  try { worker.postMessage({ type: 'init', base: absBase, cache: modCache }); }
+  catch (e) { worker.postMessage({ type: 'init', base: absBase, cache: {} }); }
+  return true;
+}
+
+function onMessage(ev) {
+  const m = ev.data;
+  switch (m.type) {
+    case 'progress': {
+      progress[m.name] = m.loaded;
+      const total = Object.values(progress).reduce((a, b) => a + b, 0);
+      status('Downloading the compiler… ' + (total / 1048576).toFixed(1) + ' MB', 'loading');
+      setStep('toolchain', 'active', (total / 1048576).toFixed(0) + ' MB');
+      break;
+    }
+    case 'cache':
+      modCache[m.name] = m.value;
+      break;
+    case 'ready':
+      toolchain = 'ready';
+      setStep('toolchain', 'done', m.ms > 300 ? fmt(m.ms) : 'cached');
+      status('Compiler ready: clang -std=c++14 -O2 -Wall  |  ' + TIME_LIMIT_MS / 1000 + ' s limit', 'ready');
+      statusEl.title = 'Clang 8.0.1 with libc++, targeting wasm32-wasi';
+      break;
+    case 'fatal':
+      toolchain = 'error';
+      setStep('toolchain', 'fail', 'failed');
+      status('The compiler could not be loaded', 'error');
+      sys(m.message, 'bad');
+      sys('Open “Toolchain source” below to point at another copy, then run again.');
+      if (worker) { worker.terminate(); worker = null; }
+      finishRun();
+      break;
+    case 'stage':
+      if (current) setStep(current, 'done');
+      current = m.stage;
+      setStep(m.stage, 'active', '');
+      if (m.stage === 'run') clockStart();
+      break;
+    case 'time':
+      steps[m.stage].querySelector('.time').textContent = fmt(m.ms);
+      break;
+    case 'out':
+      if (m.channel === 'sys') sys(m.text);
+      else if (m.channel === 'compiler') write(m.text, 'o-cc');
+      else write(m.text, m.fd === 2 ? 'o-err' : 'o-out');
+      break;
+    case 'stdin-request':
+      onStdinRequest();
+      break;
+    case 'done':
+      onDone(m);
+      break;
+  }
+}
+
+function onDone(m) {
+  if (m.ok) {
+    setStep('run', 'done');
+    sys('Exited with code ' + m.exitCode + '.', m.exitCode === 0 ? 'good' : 'bad');
+  } else {
+    setStep(m.stage, 'fail');
+    if (m.reason === 'compile') sys('Compilation failed. Fix the errors above and run again.', 'bad');
+    else if (m.reason === 'link') sys('Linking failed. A function may be declared but never defined, or need a library this toolchain lacks.', 'bad');
+    else if (m.reason === 'trap') sys('The program crashed: ' + m.message + (/unreachable/.test(m.message) ? ' (often abort(), a failed assert, or a throw)' : ''), 'bad');
+    else if (m.stage !== 'toolchain') sys('Stopped during ' + m.stage + ': ' + m.message, 'bad');
+  }
+  finishRun();
+}
+
+function finishRun() {
+  clockStop();
+  running = false;
+  current = null;
+  resetTerminal(false);
+  $('#run').classList.remove('stop');
+  $('#run-label').textContent = 'Run';
+}
+
+function runOrStop() {
+  if (running) return stop();
+  if (!activeFile()) { filesMessage('There’s no file to run yet.'); return; }
+  if (!worker && !spawn()) return;
+  clearOutput();
+  for (const s of ['compile', 'link', 'run']) setStep(s, null, '');
+  running = true;
+  $('#run').classList.add('stop');
+  $('#run-label').textContent = 'Stop';
+  if (toolchain !== 'ready') sys('Waiting for the compiler download to finish…');
+  const interactive = mode === 'interactive';
+  resetTerminal(interactive);
+  worker.postMessage({
+    type: 'run',
+    code: getCode(),
+    filename: activeFile().name,
+    stdin: interactive ? '' : $('#stdin').value,
+    sab: interactive ? stdinSab : null,
+  });
+}
+
+function stop() {
+  if (worker) { worker.terminate(); worker = null; }
+  if (current) setStep(current, 'fail');
+  if (toolchain !== 'ready') { setStep('toolchain', null, ''); toolchain = 'idle'; status('Download stopped', 'idle'); }
+  sys('Stopped.', 'bad');
+  finishRun();
+  spawn(); // keep a warm worker; cached modules make this quick
+}
+
+$('#run').addEventListener('click', runOrStop);
+document.addEventListener('keydown', (e) => {
+  if (view !== 'workspace') return;
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !(cm && cm.hasFocus())) { e.preventDefault(); runOrStop(); }
+  else if (e.shiftKey && e.altKey && e.code === 'KeyF' && !(cm && cm.hasFocus())) { e.preventDefault(); formatCode(); }
+});
+if (/Mac|iPhone|iPad/.test(navigator.platform)) $('#run kbd').textContent = '⌘↵';
+
+/* ---------------- toolchain source ---------------- */
+const baseInput = $('#base-url');
+function showResolved() {
+  const v = baseInput.value.trim() || DEFAULT_BASE;
+  let abs = '';
+  try { abs = resolveBase(v.endsWith('/') ? v : v + '/'); } catch (e) {}
+  $('#base-resolved').textContent = abs ? 'Loads from ' + abs : 'Not a valid folder or URL';
+}
+baseInput.value = base;
+showResolved();
+baseInput.addEventListener('input', showResolved);
+$('#base-default').addEventListener('click', () => { baseInput.value = DEFAULT_BASE; showResolved(); });
+$('#base-save').addEventListener('click', () => {
+  let v = baseInput.value.trim() || DEFAULT_BASE;
+  if (!v.endsWith('/')) v += '/';
+  baseInput.value = v;
+  $('#settings').open = false;
+  if (v === base && toolchain !== 'error') return;
+  base = v;
+  store.set('cppwasm.base', v);
+  if (worker) { worker.terminate(); worker = null; }
+  for (const k of Object.keys(modCache)) delete modCache[k];
+  toolchain = 'idle';
+  finishRun();
+  setStep('toolchain', null, '');
+  spawn();
+});
+
+/* ---------------- views: home, workspace, credits ---------------- */
+let view = 'home';
+let lastView = 'home';   // 'home', 'workspace' or 'room-<id>', for the credits Back link
+// Tab titles are "cpp.wasm: <page>". In the editor, <page> is the room's name, its
+// code when it has no name, or "Local workspace".
+const TITLES = { home: 'run C++ in your browser', credits: 'Credits', recordings: 'Recordings', player: 'Recording player' };
+function updateTitle() {
+  let page = TITLES[view];
+  if (view === 'workspace') page = room.active && room.label ? room.label() || 'Room' : 'Local workspace';
+  document.title = 'cpp.wasm: ' + page;
+}
+
+function go(name) {
+  if (name === 'home') history.pushState(null, '', location.pathname + location.search);
+  else history.pushState(null, '', '#' + name);
+  route();
+}
+
+function route() {
+  const h = location.hash;
+  const roomMatch = h.match(/^#room-([A-Za-z0-9-]{1,40})$/);
+  const playMatch = h.match(/^#play-([A-Za-z0-9]{1,40})$/);
+  const prev = view;
+  view = h === '#credits' ? 'credits' : h === '#recordings' ? 'recordings' : playMatch ? 'player'
+    : (h === '#workspace' || roomMatch) ? 'workspace' : 'home';
+  if (view === 'workspace' && !workspaceActive && !roomMatch) { workspaceActive = true; flushSave(); }  // a bookmarked #workspace starts one
+  // Only the home page and the workspace change rooms; other pages keep you where you are.
+  if (view === 'home' || view === 'workspace') {
+    lastView = roomMatch ? 'room-' + roomMatch[1] : view;
+    if (room.route) room.route(roomMatch ? roomMatch[1].toLowerCase() : null);
+  }
+  if (prev === 'player' && views.player) views.player.leave();
+  for (const v of ['credits', 'home', 'recordings', 'player']) document.body.classList.toggle('show-' + v, view === v);
+  updateTitle();
+  window.scrollTo(0, 0);
+  if (view === 'credits') $('#credits-title').focus({ preventScroll: true });
+  else if (view === 'home') renderHome();
+  else if (view === 'recordings') { if (views.recordings) views.recordings.enter(); }
+  else if (view === 'player') { if (views.player) views.player.enter(playMatch[1]); }
+  else if (cm) cm.refresh();
+}
+
+function timeAgo(ms) {
+  const s = Math.round((ms - Date.now()) / 1000);
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  const steps = [[60, 'second'], [60, 'minute'], [24, 'hour'], [30, 'day'], [12, 'month'], [Infinity, 'year']];
+  let v = s;
+  for (const [size, unit] of steps) {
+    if (Math.abs(v) < size) return rtf.format(Math.round(v), unit);
+    v /= size;
+  }
+  return '';
+}
+
+function renderHome() {
+  $('#home-msg').textContent = '';
+  renderHomeCollab();
+  const resume = $('#resume');
+  resume.hidden = !workspaceActive;
+  if (!workspaceActive) return;
+  const names = files.map((f) => f.name);
+  let list = names.slice(0, 3).join(', ');
+  if (names.length > 3) list += ' and ' + (names.length - 3) + ' more';
+  $('#resume-detail').textContent = list + (lastEdited ? ', edited ' + timeAgo(lastEdited) : '');
+}
+
+function confirmReplace(what) {
+  if (!workspaceActive) return true;
+  return window.confirm(what + '\n\nYour current ' + plural(files.length, 'file') +
+    ' will be replaced. Use “Export zip” first if you want to keep them.');
+}
+
+$('#home-continue').addEventListener('click', () => go('workspace'));
+$('#home-export').addEventListener('click', exportZip);
+$('#home-new').addEventListener('click', () => {
+  if (!confirmReplace('Start a new workspace?')) return;
+  startWorkspace([{ id: newId(), name: 'main.cpp', code: STARTER, stdin: '' }]);
+});
+/* Homepage: start or join a collaboration room (collab.js does the work). */
+function renderHomeCollab() {
+  const box = $('#home-collab');
+  box.hidden = !(room.available && cm);
+  if (box.hidden) return;
+  const nameInput = $('#home-my-name');
+  if (document.activeElement !== nameInput) nameInput.value = room.getMyName();
+  $('#home-room-error').textContent = '';
+  // Offer "my files" only when there is a saved workspace to share.
+  const seed = $('#home-seed');
+  seed.hidden = !workspaceActive;
+  $('#home-seed-mine').textContent = 'My files (' + files.map((f) => f.name).slice(0, 2).join(', ') + (files.length > 2 ? ' and ' + (files.length - 2) + ' more' : '') + ')';
+  seed.querySelector('input[value="' + (workspaceActive ? 'mine' : 'new') + '"]').checked = true;
+}
+$('#home-my-name').addEventListener('change', (e) => { e.target.value = room.setMyName(e.target.value); });
+$('#home-room-start').addEventListener('click', () => {
+  room.setMyName($('#home-my-name').value);
+  const useMine = workspaceActive && document.querySelector('input[name="home-seed"]:checked').value === 'mine';
+  const seedFiles = useMine ? null : [{ name: 'main.cpp', code: STARTER, stdin: '' }];
+  room.create($('#home-room-name').value, seedFiles);
+  $('#home-room-name').value = '';
+});
+$('#home-room-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#home-room-start').click(); });
+$('#home-room-join').addEventListener('click', () => {
+  room.setMyName($('#home-my-name').value);
+  const id = room.parseCode($('#home-room-code').value);
+  if (!id) { $('#home-room-error').textContent = 'Paste a room link, or a code like abcd-efgh-jkmn.'; return; }
+  $('#home-room-code').value = '';
+  go('room-' + id);
+});
+$('#home-room-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#home-room-join').click(); });
+
+$('#home-import').addEventListener('click', () => chooseZip('home'));
+dropTarget($('#home-import'), importFromHome);
+
+async function importFromHome(file) {
+  const msg = $('#home-msg');
+  msg.textContent = '';
+  const card = $('#home-import');
+  card.disabled = true;
+  try {
+    const { files: imported, notes } = await readZip(file, new Set());
+    if (!confirmReplace('Open the ' + plural(imported.length, 'file') + ' from ' + file.name + '?')) return;
+    startWorkspace(imported);
+    filesMessage('Imported ' + plural(imported.length, 'file') + ' from ' + file.name + (notes.length ? ' (' + notes.join(', ') + ')' : '') + '.', true);
+  } catch (e) {
+    msg.textContent = e.message;
+  } finally {
+    card.disabled = false;
+  }
+}
+
+$('#brand-link').addEventListener('click', (e) => { e.preventDefault(); go('home'); });
+$('#credits-back').addEventListener('click', (e) => { e.preventDefault(); go(lastView); });
+$('#recs-back').addEventListener('click', (e) => { e.preventDefault(); go(lastView); });
+
+/* ---------------- collaboration (src/js/collab.js) ---------------- */
+let roomStash = null;
+const collabApi = {
+  $, cm, store, room, rec, views, NAME_RE, newId, makeUnique, filesMessage, go, updateTitle,
+  getFiles: () => files,
+  setFiles: (list) => { files = list; },
+  getActiveId: () => activeId,
+  setActiveId: (id) => { activeId = id; },
+  renderFiles: () => renderFiles(),
+  setTitle: (t) => { $('#file-title').textContent = t; },
+  setFileActionsEnabled: (on) => { for (const id of ['#new-file', '#import-zip']) $(id).disabled = !on; },
+  // Put the local workspace aside while in a room; it is restored, untouched, on leaving.
+  enterRoom() {
+    if (rec.active) rec.stop('workspace');
+    flushSave();
+    roomStash = { files, activeId, docs: new Map(docs) };
+    docs.clear();
+    room.active = true;
+    return { files: files.map((f) => ({ name: f.name, code: f.code, stdin: f.stdin })) };
+  },
+  exitRoom() {
+    if (rec.active) rec.stop('workspace');
+    room.active = false;
+    if (!roomStash) return;
+    files = roomStash.files;
+    docs.clear();
+    roomStash.docs.forEach((d, id) => docs.set(id, d));
+    const id = roomStash.activeId;
+    roomStash = null;
+    openFile(files.some((f) => f.id === id) ? id : files[0].id);
+  },
+};
+if (cm && window.CppWasmCollabInstall) window.CppWasmCollabInstall(collabApi);
+else { const b = $('#collab-btn'); b.disabled = true; b.title = 'Collaboration needs the code editor to load'; }
+if (cm && window.CppWasmRecordInstall) window.CppWasmRecordInstall(collabApi);
+else { const b = $('#rec-btn'); b.disabled = true; b.title = 'Recording needs the code editor to load'; }
+
+window.addEventListener('hashchange', route);
+window.addEventListener('popstate', route);
+route();
+
+setMode(mode);
+
+// Start fetching the toolchain right away so the first Run is quick.
+spawn();
+})();
