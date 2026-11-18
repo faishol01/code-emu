@@ -33,40 +33,23 @@ int main() {
 `;
 const NEW_FILE_TEMPLATE = '#include <iostream>\n\nint main() {\n    \n}\n';
 
-if (window.CodeMirror) {
-  cm = CodeMirror.fromTextArea(fallback, {
-    mode: 'text/x-c++src',
-    lineNumbers: true,
-    indentUnit: 4,
-    tabSize: 4,
-    indentWithTabs: false,
-    matchBrackets: true,
-    autoCloseBrackets: true,
-    extraKeys: {
-      'Ctrl-Enter': () => runOrStop(),
-      'Cmd-Enter': () => runOrStop(),
-      Tab: (ed) => ed.somethingSelected() ? ed.indentSelection('add') : ed.replaceSelection('    ', 'end'),
-      'Shift-Tab': (ed) => ed.indentSelection('subtract'),
-      'Shift-Alt-F': () => formatCode(),
+if (window.CppEditor) {
+  // CodeMirror 6 (through src/js/editor.js). The textarea is only the fallback.
+  const wrap = $('#editor-wrap');
+  fallback.remove();
+  cm = CppEditor.create(wrap, {
+    onRun: () => runOrStop(),
+    onFormat: () => formatCode(),
+    onChange(changes) {
+      if (room.active) return;   // rooms sync and record through the shared document (collab.js)
+      // Recording (local workspace): each change is applied after the previous one.
+      if (rec.active && shownId) for (const c of changes) rec.code(shownId, c.pos, c.del, c.text);
+      const f = files.find((x) => x.id === shownId);
+      if (f) { f.code = cm.getValue(); saveFiles(); }
     },
-  });
-  cm.on('change', (_, ch) => {
-    if (room.active) return;
-    if (ch.origin !== 'setValue') recordLocalEdit(ch);
-    const f = activeFile();
-    if (f) { f.code = cm.getValue(); saveFiles(); }
-  });
-  // Recording (local workspace; rooms are recorded from the shared document in collab.js).
-  // Positions are taken in beforeChange, when they are still exact for each change.
-  cm.on('beforeChange', (_, ch) => {
-    if (!rec.active || room.active || ch.origin === 'setValue') return;
-    const d = cm.getDoc();
-    pendingEdits.push({ ch, id: activeId, from: d.indexFromPos(ch.from), to: d.indexFromPos(ch.to) });
-  });
-  cm.on('cursorActivity', () => {
-    if (!rec.active || room.active || !activeId) return;
-    const d = cm.getDoc();
-    rec.cursor(activeId, d.indexFromPos(d.getCursor('anchor')), d.indexFromPos(d.getCursor('head')));
+    onSelection(anchor, head) {
+      if (rec.active && !room.active && shownId) rec.cursor(shownId, anchor, head);
+    },
   });
 } else {
   fallback.addEventListener('input', () => { activeFile().code = fallback.value; saveFiles(); });
@@ -81,7 +64,7 @@ if (window.CodeMirror) {
   });
 }
 const getCode = () => (cm ? cm.getValue() : fallback.value);
-const setCode = (v) => { if (cm) cm.setValue(v); else { fallback.value = v; activeFile().code = v; saveFiles(); } };
+const setCode = (v) => { if (cm) cm.replaceAll(v); else { fallback.value = v; activeFile().code = v; saveFiles(); } };
 
 /* ---------------- files ----------------
    Each file is its own program: Run builds the file that is open. Files, with
@@ -96,12 +79,6 @@ const room = { active: false, ops: null, route: null };
 // Filled in by record.js. While recording, app.js reports local changes to it.
 const rec = { active: false };
 const views = {};   // extra views (recordings, player) registered by record.js
-const pendingEdits = [];
-function recordLocalEdit(ch) {
-  let p = pendingEdits.shift();
-  while (p && p.ch.canceled) p = pendingEdits.shift();
-  if (p && rec.active) rec.code(p.id, p.from, p.to - p.from, ch.text.join('\n'));
-}
 // Smallest single replacement that turns a into b (for the batch input box).
 function diffStrings(a, b) {
   let s = 0;
@@ -111,7 +88,11 @@ function diffStrings(a, b) {
   return { pos: s, del: ea - s, text: b.slice(s, eb) };
 }
 let lastEdited = 0;
-const docs = new Map();          // file id -> CodeMirror.Doc, so each file keeps its own undo history
+// file id -> editor state, so each file keeps its own undo history. The state of the
+// file on screen lives in the editor; it is put back here when you switch away.
+const docs = new Map();
+let shownId = null;   // the local file whose state is in the editor
+function stashShown() { if (cm && shownId) docs.set(shownId, cm.state); }
 const newId = () => 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const activeFile = () => files.find((f) => f.id === activeId);
 
@@ -160,9 +141,11 @@ function openFile(id, focusEditor) {
   if (!f) return;
   activeId = id;
   if (cm) {
-    let doc = docs.get(id);
-    if (!doc) { doc = CodeMirror.Doc(f.code, 'text/x-c++src'); docs.set(id, doc); }
-    if (cm.getDoc() !== doc) cm.swapDoc(doc);
+    if (shownId !== id) {
+      stashShown();
+      cm.setState(docs.get(id) || cm.newState(f.code));
+      shownId = id;
+    }
     if (focusEditor) cm.focus();
   } else {
     fallback.value = f.code;
@@ -326,7 +309,7 @@ function newFile() {
     if (rec.active) rec.add(files[files.length - 1]);
   }
   openFile(id);
-  if (cm) cm.setCursor({ line: 3, ch: 4 });
+  if (cm) cm.setCursor(NEW_FILE_TEMPLATE.indexOf('    \n') + 4);   // inside main()
   if (room.active) queueMicrotask(() => renderFiles(id));
   else renderFiles(id);   // start with the name ready to type over
 }
@@ -340,6 +323,7 @@ function deleteFile(id) {
   const i = files.indexOf(f);
   files.splice(i, 1);
   docs.delete(id);
+  if (shownId === id) shownId = null;
   if (activeId === id) openFile(files[Math.min(i, files.length - 1)].id);
   else { renderFiles(); saveFiles(); }
 }
@@ -455,6 +439,7 @@ function startWorkspace(newFiles) {
   if (rec.active) rec.stop('workspace');
   files = newFiles;
   docs.clear();
+  shownId = null;
   workspaceActive = true;
   openFile(files[0].id);
   flushSave();
@@ -542,14 +527,7 @@ async function formatCode() {
     const result = mod.format(src, activeFile().name, FORMAT_STYLE);
     if (result === src) { note('Already formatted'); return; }
     if (cm) {
-      const cur = cm.getCursor();
-      const scroll = cm.getScrollInfo();
-      cm.operation(() => {
-        const last = cm.lastLine();
-        cm.replaceRange(result, { line: 0, ch: 0 }, { line: last, ch: cm.getLine(last).length });
-        cm.setCursor({ line: Math.min(cur.line, cm.lastLine()), ch: cur.ch });
-      });
-      cm.scrollTo(scroll.left, scroll.top);
+      cm.replaceAll(result);   // one undoable change; the cursor stays with its text
     } else {
       setCode(result);
     }
@@ -564,6 +542,77 @@ async function formatCode() {
   }
 }
 $('#format').addEventListener('click', formatCode);
+
+/* ---------------- keyboard shortcuts list ---------------- */
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+const SHORTCUTS = [
+  ['Program', [['Mod+Enter', 'Run or stop'], ['Shift+Alt+F', 'Format code']]],
+  ['Multiple cursors', [
+    ['Mod+Click', 'Add a cursor'],
+    ['Mod+Alt+↑ / ↓', 'Add a cursor above / below'],
+    ['Mod+D', 'Select the next match of the selection'],
+    ['Mod+Shift+L', 'Select all matches'],
+    ['Alt+Drag', 'Column (box) selection'],
+    ['Esc', 'Back to one cursor'],
+  ]],
+  ['Lines', [
+    ['Alt+↑ / ↓', 'Move line up / down'],
+    ['Shift+Alt+↑ / ↓', 'Copy line up / down'],
+    ['Shift+Mod+K', 'Delete line'],
+    [isMac ? 'Ctrl+L' : 'Alt+L', 'Select line'],
+    ['Tab / Shift+Tab', 'Indent / outdent'],
+    ['Mod+/', 'Toggle line comment'],
+    [isMac ? 'Shift+Ctrl+A' : 'Shift+Alt+A', 'Toggle block comment'],
+  ]],
+  ['Find', [
+    ['Mod+F', 'Find and replace'],
+    ['Mod+G / F3', 'Next match (Shift for previous)'],
+    ['Mod+Alt+G', 'Go to line'],
+  ]],
+  ['Code', [
+    ['Mod+Space', 'Show completions'],
+    ['Mod+I', 'Select the enclosing block'],
+    ['Shift+Mod+\\', 'Jump to matching bracket'],
+    [isMac ? 'Mod+Alt+[ / ]' : 'Ctrl+Shift+[ / ]', 'Fold / unfold block'],
+    ['Mod+Z / Mod+Shift+Z', 'Undo / redo'],
+  ]],
+];
+function renderShortcuts() {
+  const box = $('#shortcuts');
+  box.textContent = '';
+  const mod = isMac ? '⌘' : 'Ctrl';
+  for (const [group, rows] of SHORTCUTS) {
+    const h = document.createElement('h4');
+    h.textContent = group;
+    const dl = document.createElement('dl');
+    for (const [keys, what] of rows) {
+      const dt = document.createElement('dt');
+      for (const [i, part] of keys.replace(/Mod/g, mod).split(' / ').entries()) {
+        if (i) dt.append(' / ');
+        const k = document.createElement('kbd');
+        k.textContent = part;
+        dt.appendChild(k);
+      }
+      const dd = document.createElement('dd');
+      dd.textContent = what;
+      dl.append(dt, dd);
+    }
+    box.append(h, dl);
+  }
+}
+const shortcutsBtn = $('#shortcuts-btn');
+function toggleShortcuts(open) {
+  const box = $('#shortcuts');
+  if (open === undefined) open = box.hidden;
+  if (open) renderShortcuts();
+  box.hidden = !open;
+  shortcutsBtn.setAttribute('aria-expanded', String(open));
+}
+shortcutsBtn.addEventListener('click', () => toggleShortcuts());
+document.addEventListener('pointerdown', (e) => {
+  if (!$('#shortcuts').hidden && !e.target.closest('.shortcuts-wrap')) toggleShortcuts(false);
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#shortcuts').hidden) toggleShortcuts(false); });
 
 /* ---------------- output ---------------- */
 const out = $('#output');
@@ -765,7 +814,7 @@ function onStdinRequest() {
   clockPause();
   termRow.classList.add('waiting');
   termInput.placeholder = 'The program is waiting for input';
-  if (document.activeElement !== termInput && !(cm && cm.hasFocus())) termInput.focus();
+  if (document.activeElement !== termInput && !(cm && cm.hasFocus)) termInput.focus();
 }
 
 function sendLine(text) {
@@ -986,8 +1035,8 @@ function stop() {
 $('#run').addEventListener('click', runOrStop);
 document.addEventListener('keydown', (e) => {
   if (view !== 'workspace') return;
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !(cm && cm.hasFocus())) { e.preventDefault(); runOrStop(); }
-  else if (e.shiftKey && e.altKey && e.code === 'KeyF' && !(cm && cm.hasFocus())) { e.preventDefault(); formatCode(); }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !(cm && cm.hasFocus)) { e.preventDefault(); runOrStop(); }
+  else if (e.shiftKey && e.altKey && e.code === 'KeyF' && !(cm && cm.hasFocus)) { e.preventDefault(); formatCode(); }
 });
 if (/Mac|iPhone|iPad/.test(navigator.platform)) $('#run kbd').textContent = '⌘↵';
 
@@ -1168,6 +1217,8 @@ const collabApi = {
   enterRoom() {
     if (rec.active) rec.stop('workspace');
     flushSave();
+    stashShown();   // keep the open file's undo history for when you come back
+    shownId = null;
     roomStash = { files, activeId, docs: new Map(docs) };
     docs.clear();
     room.active = true;
@@ -1179,6 +1230,7 @@ const collabApi = {
     if (!roomStash) return;
     files = roomStash.files;
     docs.clear();
+    shownId = null;
     roomStash.docs.forEach((d, id) => docs.set(id, d));
     const id = roomStash.activeId;
     roomStash = null;

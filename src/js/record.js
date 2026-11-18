@@ -355,7 +355,8 @@ window.CppWasmRecordInstall = function (app) {
     item: null, events: [], users: null, cm: null,
     timesReal: null, timesSkip: null, skip: true, speed: 1,
     i: 0, pos: 0, playing: false, raf: 0, lastFrame: 0,
-    state: null, checkpoints: [], docs: new Map(), dirty: new Set(), shown: null, pinned: null, marks: [], flash: [],
+    // inEditor: the file whose text is in the editor and up to date (null = reload it)
+    state: null, checkpoints: [], inEditor: null, shown: null, pinned: null,
   };
   const PAUSE_CAP_MS = 1500;
   const CHECKPOINT_EVERY = 300;
@@ -439,7 +440,7 @@ window.CppWasmRecordInstall = function (app) {
     }
     while (P.i < target) apply(P.state, P.events[P.i++]);
     P.pos = pos;
-    P.state.files.forEach((_, k) => P.dirty.add(k));
+    P.inEditor = null;
     render(true);
   }
 
@@ -453,45 +454,26 @@ window.CppWasmRecordInstall = function (app) {
     return null;
   }
 
-  function docFor(k) {
-    let d = P.docs.get(k);
-    if (!d) { d = CodeMirror.Doc(P.state.files.get(k).code, 'text/x-c++src'); P.docs.set(k, d); P.dirty.delete(k); }
-    if (P.dirty.has(k)) { d.setValue(P.state.files.get(k).code); P.dirty.delete(k); }
-    return d;
-  }
-
-  function clearMarks() { for (const m of P.marks) m.clear(); P.marks = []; }
-
+  // Everyone's cursor and selection in the file on screen.
   function drawCursors(k) {
-    clearMarks();
-    if (k == null) return;
-    const doc = P.cm.getDoc();
-    const len = doc.getValue().length;
-    P.state.users.forEach((u) => {
-      if (u.left || u.file !== k) return;
-      const a = doc.posFromIndex(Math.min(u.anchor, len)), h = doc.posFromIndex(Math.min(u.head, len));
-      if (u.anchor !== u.head) {
-        const from = u.anchor < u.head ? a : h, to = u.anchor < u.head ? h : a;
-        P.marks.push(doc.markText(from, to, { css: 'background-color:' + u.color + '55' }));
-      }
-      const caret = document.createElement('span');
-      caret.className = 'remote-caret';
-      caret.style.borderColor = u.color;
-      const tag = document.createElement('div');
-      tag.style.backgroundColor = u.color;
-      tag.textContent = u.name;
-      caret.appendChild(tag);
-      P.marks.push(doc.setBookmark(h, { widget: caret, insertLeft: true }));
-    });
+    const marks = [];
+    if (k != null) {
+      P.state.users.forEach((u) => {
+        if (u.left || u.file !== k) return;
+        if (u.anchor !== u.head) marks.push({ from: u.anchor, to: u.head, color: u.color + '55' });
+        marks.push({ caret: u.head, name: u.name, color: u.color });
+      });
+    }
+    P.cm.setMarks(marks);
   }
 
   function render(full) {
     const s = P.state;
     const k = shownFile();
-    if (k !== P.shown || full) {
+    if (k !== P.shown || full || P.inEditor !== k) {
       P.shown = k;
-      if (k != null) { const d = docFor(k); if (P.cm.getDoc() !== d) P.cm.swapDoc(d); }
-      else P.cm.swapDoc(CodeMirror.Doc('', 'text/x-c++src'));
+      P.cm.setState(P.cm.newState(k != null ? s.files.get(k).code : '', { readOnly: true }));
+      P.inEditor = k;
     }
     const f = k != null ? s.files.get(k) : null;
     $('#player-file').textContent = f ? f.name : 'No files';
@@ -556,25 +538,18 @@ window.CppWasmRecordInstall = function (app) {
     const target = indexAt(P.pos);
     const bulk = target - P.i > 400;
     let needFull = false;
-    for (const m of P.flash) m.clear();
-    P.flash = [];
     while (P.i < target) {
       const e = P.events[P.i++];
       apply(P.state, e);
-      if (bulk) { P.dirty.add(e.file); continue; }
+      if (bulk) { if (e.file === P.inEditor) P.inEditor = null; continue; }
       if (e.type === T.EDIT) {
-        const d = P.docs.get(e.file);
-        if (d && !P.dirty.has(e.file)) {
-          const from = d.posFromIndex(e.pos), to = d.posFromIndex(e.pos + e.del);
-          d.replaceRange(e.text, from, to);
-          if (e.text && d === P.cm.getDoc()) {
-            const end = d.posFromIndex(e.pos + e.text.length);
-            P.flash.push(d.markText(from, end, { className: 'rec-new' }));
-            if (e.file === P.shown) P.cm.scrollIntoView(end, 60);
-          }
-        } else P.dirty.add(e.file);
+        // Animate edits to the file on screen; other files are just strings in the state.
+        if (e.file === P.inEditor) {
+          P.cm.applyChange(e.pos, e.del, e.text);
+          if (e.text) { P.cm.flash(e.pos, e.pos + e.text.length); P.cm.scrollTo(e.pos + e.text.length); }
+        }
       } else if (e.type === T.ADD || e.type === T.DELETE || e.type === T.RENAME) {
-        P.dirty.add(e.file);
+        if (e.file === P.inEditor) P.inEditor = null;
         needFull = true;
       }
     }
@@ -624,12 +599,8 @@ window.CppWasmRecordInstall = function (app) {
     let decoded;
     try { decoded = R.decode(item.bytes); } catch (e) { $('#player-title').textContent = 'Can’t play this recording'; $('#player-meta').textContent = e.message; return; }
     P.item = item;
-    if (!P.cm) {
-      P.cm = CodeMirror($('#player-cm'), {
-        value: '', mode: 'text/x-c++src', lineNumbers: true, readOnly: true, indentUnit: 4, tabSize: 4,
-      });
-    }
-    P.docs.clear(); P.dirty.clear(); P.state = null; P.i = 0; P.pinned = null; P.shown = null;
+    if (!P.cm) P.cm = window.CppEditor.create($('#player-cm'), { readOnly: true });
+    P.state = null; P.i = 0; P.pinned = null; P.shown = null; P.inEditor = null;
     $('#player-follow').checked = true;
     prepare(decoded.events);
     const dateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });

@@ -10,7 +10,6 @@
 <title>cpp.wasm: run C++ in your browser</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
 <link rel="stylesheet" href="src/vendors/ibm-plex/plex.css">
-<link rel="stylesheet" href="src/vendors/codemirror/codemirror.css">
 <link rel="stylesheet" href="src/css/style.css">
 </head>
 <body>
@@ -64,6 +63,10 @@
       </div>
       <div class="head-right">
         <span class="notice" id="format-note" aria-live="polite"></span>
+        <div class="shortcuts-wrap">
+          <button type="button" id="shortcuts-btn" aria-expanded="false" aria-controls="shortcuts" title="Keyboard shortcuts">Shortcuts</button>
+          <div class="shortcuts" id="shortcuts" role="dialog" aria-label="Keyboard shortcuts" hidden></div>
+        </div>
         <button type="button" id="format" title="Format code (Shift+Alt+F)">Format</button>
       </div>
     </div>
@@ -273,9 +276,9 @@
         <p>Powers the Format button. LLVM’s clang-format compiled to WebAssembly, loaded from <code>src/vendors/clang-format/</code> the first time you format.</p>
       </div>
       <div class="credit">
-        <div><a class="name" href="https://codemirror.net/5/" target="_blank" rel="noopener">CodeMirror 5</a> <span class="by">by Marijn Haverbeke and contributors</span></div>
+        <div><a class="name" href="https://codemirror.net/" target="_blank" rel="noopener">CodeMirror 6</a> <span class="by">by Marijn Haverbeke and contributors</span></div>
         <span class="license">MIT</span>
-        <p>The code editor, with C++ highlighting, bracket matching and auto-closing brackets. Bundled in <code>src/vendors/codemirror/</code>.</p>
+        <p>The code editor and the recording player, with C++ highlighting, bracket matching and auto-closing brackets. Bundled in <code>src/vendors/editor/</code>.</p>
       </div>
       <div class="credit">
         <div><a class="name" href="https://github.com/IBM/plex" target="_blank" rel="noopener">IBM Plex Sans and Plex Mono</a> <span class="by">by Mike Abbink and Bold Monday for IBM</span></div>
@@ -285,14 +288,14 @@
 
     <h2>Collaboration</h2>
       <div class="credit">
-        <div><a class="name" href="https://github.com/yjs/yjs" target="_blank" rel="noopener">Yjs, y-codemirror and y-protocols</a> <span class="by">by Kevin Jahns and contributors</span></div>
+        <div><a class="name" href="https://github.com/yjs/yjs" target="_blank" rel="noopener">Yjs, y-codemirror.next and y-protocols</a> <span class="by">by Kevin Jahns and contributors</span></div>
         <span class="license">MIT</span>
         <p>The shared documents behind rooms: edits from everyone merge without conflicts, and other people’s cursors show in the editor.</p>
       </div>
       <div class="credit">
         <div><a class="name" href="https://github.com/dmotz/trystero" target="_blank" rel="noopener">Trystero</a> <span class="by">by Dan Motzenbecker and contributors</span></div>
         <span class="license">MIT</span>
-        <p>Connects the browsers in a room directly over WebRTC, finding each other through public Nostr relays. Bundled with the libraries above in <code>src/vendors/collab/</code>.</p>
+        <p>Connects the browsers in a room directly over WebRTC, finding each other through public Nostr relays. Bundled with CodeMirror and the libraries above in <code>src/vendors/editor/</code>.</p>
       </div>
 
     <h2>Hosting and files</h2>
@@ -338,13 +341,10 @@
   </div>
 </footer>
 
-<script src="src/vendors/codemirror/codemirror.js"></script>
-<script src="src/vendors/codemirror/mode/clike/clike.js"></script>
-<script src="src/vendors/codemirror/addon/edit/matchbrackets.js"></script>
-<script src="src/vendors/codemirror/addon/edit/closebrackets.js"></script>
+<script src="src/vendors/editor/editor.bundle.js"></script>
+<script src="src/js/editor.js"></script>
 
 <script src="src/vendors/fflate/fflate.min.js"></script>
-<script src="src/vendors/collab/collab.bundle.js"></script>
 <script src="src/js/collab.js"></script>
 <script src="src/js/cpprec.js"></script>
 <script src="src/js/record.js"></script>
