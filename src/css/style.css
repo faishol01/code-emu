@@ -12,6 +12,9 @@
   --fail: #B42318;
   --ok: #0F7B5F;
   --sel: #CFE2F3;
+  --active-line: rgba(0, 89, 156, .045);
+  --match: rgba(240, 168, 48, .22);
+  --match-strong: rgba(240, 168, 48, .5);
   /* code tokens */
   --t-kw: #6B3FA0;
   --t-type: #00599C;
@@ -41,6 +44,9 @@
     --fail: #F27A6E;
     --ok: #4CC79A;
     --sel: #24415E;
+    --active-line: rgba(90, 169, 230, .06);
+    --match: rgba(240, 168, 48, .2);
+    --match-strong: rgba(240, 168, 48, .45);
     --t-kw: #C69AF2;
     --t-type: #6FB7EE;
     --t-str: #E7A86B;
@@ -211,6 +217,27 @@ body.mode-interactive #input-pane { display: none; }
 .head-left .icon-btn { margin-left: -6px; }
 #toggle-files[aria-expanded="true"] { color: var(--accent); }
 
+#shortcuts-btn { font-size: 12px; color: var(--muted); }
+.shortcuts-wrap { position: relative; }
+.shortcuts {
+  position: absolute; right: -60px; top: calc(100% + 10px); z-index: 30;
+  width: min(420px, 92vw); max-height: min(70vh, 560px); overflow: auto;
+  background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(10, 20, 40, .2);
+  padding: 6px 16px 14px; font-size: 13px;
+}
+.shortcuts[hidden] { display: none; }
+.shortcuts h4 { margin: 12px 0 6px; font-size: 11.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.shortcuts dl { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; margin: 0; align-items: baseline; }
+.shortcuts dt { white-space: nowrap; color: var(--muted); font-size: 12px; }
+.shortcuts dd { margin: 0; }
+.shortcuts kbd {
+  font: 500 11.5px var(--mono); color: var(--ink);
+  background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 4px; padding: 0 5px;
+}
+
 /* ---------- file list ---------- */
 body.files-hidden main { grid-template-columns: minmax(0, 1.45fr) minmax(300px, 1fr); }
 body.files-hidden .files { display: none; }
@@ -278,28 +305,9 @@ body.mode-interactive .term-input { display: flex; }
 .o-in { color: var(--accent); }
 
 #editor-wrap { flex: 1; min-height: 0; position: relative; }
-.CodeMirror {
-  height: 100%;
-  font-family: var(--mono);
-  font-size: 14px;
-  line-height: 1.6;
-  background: var(--panel);
-  color: var(--t-def);
-}
-.CodeMirror-gutters { background: var(--panel-2); border-right: 1px solid var(--line); }
-.CodeMirror-linenumber { color: var(--muted); padding: 0 10px 0 6px; }
-.CodeMirror-cursor { border-left: 2px solid var(--accent); }
-.CodeMirror-selected, .CodeMirror-focused .CodeMirror-selected { background: var(--sel); }
-.CodeMirror-matchingbracket { color: inherit !important; outline: 1px solid var(--accent); }
-.CodeMirror-lines { padding: 10px 0; }
-.cm-s-default .cm-keyword { color: var(--t-kw); font-weight: 500; }
-.cm-s-default .cm-type, .cm-s-default .cm-builtin, .cm-s-default .cm-variable-3 { color: var(--t-type); }
-.cm-s-default .cm-string, .cm-s-default .cm-string-2 { color: var(--t-str); }
-.cm-s-default .cm-number, .cm-s-default .cm-atom { color: var(--t-num); }
-.cm-s-default .cm-comment { color: var(--t-com); font-style: italic; }
-.cm-s-default .cm-meta { color: var(--t-meta); }
-.cm-s-default .cm-def, .cm-s-default .cm-variable, .cm-s-default .cm-variable-2,
-.cm-s-default .cm-property, .cm-s-default .cm-operator, .cm-s-default .cm-punctuation { color: var(--t-def); }
+/* CodeMirror 6 (colours and fonts come from the theme in src/js/editor.js) */
+#editor-wrap .cm-editor, #player-cm .cm-editor { height: 100%; }
+#editor-wrap .cm-scroller, #player-cm .cm-scroller { overflow: auto; }
 #fallback-editor, #stdin {
   width: 100%; height: 100%;
   border: 0; resize: none; outline: none;
@@ -452,7 +460,30 @@ summary:hover { color: var(--ink); text-decoration: underline; }
 .remote-caret.flash { animation: caret-flash .4s ease-in-out 3; }
 @keyframes caret-flash { 50% { box-shadow: 0 0 0 4px rgba(127, 127, 127, .35); } }
 @media (prefers-reduced-motion: reduce) { .remote-caret.flash { animation: none; } }
-.CodeMirror-lines .y-line-selection { border-radius: 2px; }
+/* y-codemirror.next draws collaborators' cursors in the editor; same look as the player's. */
+.cm-editor .cm-ySelectionCaret { border-left: 2px solid; border-right: 0; margin: 0 -1px; }
+.cm-editor .cm-ySelectionCaret > .cm-ySelectionCaretDot {
+  width: 6px; height: 6px; top: -3px; left: -4px;
+  background-color: inherit; border: 3px solid; border-color: inherit; box-sizing: border-box;
+}
+.cm-editor .cm-ySelectionCaret > .cm-ySelectionInfo {
+  top: auto; bottom: 100%; left: -2px; margin-bottom: 1px;
+  padding: 0 5px; border-radius: 3px 3px 3px 0;
+  font: 600 11px/1.6 var(--sans); color: #fff;
+  background-color: inherit;
+  opacity: 0; transform: translateY(3px);
+  transition: opacity .25s, transform .25s;
+}
+.cm-editor .cm-ySelectionCaret.show-name > .cm-ySelectionInfo,
+.cm-editor .cm-ySelectionCaret:hover > .cm-ySelectionInfo { opacity: 1; transform: none; }
+.cm-editor .cm-ySelectionCaret.flash { animation: caret-flash .4s ease-in-out 3; }
+@media (prefers-reduced-motion: reduce) { .cm-editor .cm-ySelectionCaret.flash { animation: none; } }
+.jump-flash {
+  display: inline-block; width: 0; height: 1.35em; vertical-align: -0.3em;
+  box-shadow: 0 0 0 6px rgba(240, 168, 48, .45); border-radius: 2px;
+  animation: jump-fade .9s ease-out forwards;
+}
+@keyframes jump-fade { to { box-shadow: 0 0 0 14px rgba(240, 168, 48, 0); } }
 .collab-people .person {
   display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0;
   padding: 4px 6px; margin: 0 -6px; border-radius: 6px;
@@ -527,7 +558,7 @@ body.show-player #player { display: flex; }
 .pane-head.sub { border-top: 1px solid var(--line); }
 .player-input { margin: 0; padding: 10px 14px; font: 12.5px/1.5 var(--mono); white-space: pre-wrap; overflow: auto; flex: 1; color: var(--ink); }
 .player-editor #player-cm { flex: 1; min-height: 0; }
-.player-editor .CodeMirror { height: 100%; }
+.player-editor #player-cm { overflow: hidden; }
 .follow { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); cursor: pointer; user-select: none; }
 .follow input { accent-color: var(--accent); margin: 0; }
 .rec-new { background: rgba(240, 168, 48, .35); border-radius: 2px; }

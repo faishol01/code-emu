@@ -19,6 +19,7 @@ src/
     collab.js               collaboration rooms (WebRTC)
     cpprec.js               the .cpprec recording format (encoder and decoder)
     record.js               recorder, Recordings page and player
+    editor.js               the editor: a small wrapper around CodeMirror 6
   vendors/
     wasm-clang/
       clang                 ┐
@@ -26,10 +27,9 @@ src/
       memfs                 │ https://github.com/binji/wasm-clang
       sysroot.tar           ┘
     clang-format/           formatter for the Format button (wasm-fmt 23.1.1)
-    codemirror/             code editor (CodeMirror 5.65.16)
+    editor/                 CodeMirror 6 + Yjs, y-codemirror.next, y-protocols, Trystero (one bundle)
     ibm-plex/               IBM Plex Sans and Mono fonts (Fontsource 5.3.0)
     fflate/                 zip reading and writing (fflate 0.8.3)
-    collab/                 Yjs, y-codemirror, y-protocols and Trystero, bundled
     coi-serviceworker/      license for coi-serviceworker.js
 ```
 
@@ -91,6 +91,28 @@ Header always set Cross-Origin-Embedder-Policy "require-corp"
 With these headers set on the server, `coi-serviceworker.js` does nothing.
 Without either, the page still works, but only in Batch input mode.
 
+## Editor
+
+The editor is CodeMirror 6 (`src/js/editor.js` wraps it). Besides C++
+highlighting, auto-closing brackets and per-file undo, it has:
+
+- **Multiple cursors**: Ctrl/⌘+click, Ctrl/⌘+Alt+↑/↓ to add a cursor above or
+  below, Ctrl/⌘+D to select the next match, Ctrl/⌘+Shift+L for all matches,
+  Alt+drag for a column selection, Esc to go back to one cursor
+- **Line commands**: Alt+↑/↓ move a line, Shift+Alt+↑/↓ copy it,
+  Ctrl/⌘+Shift+K delete it, Ctrl/⌘+/ toggle a comment
+- **Find and replace** (Ctrl/⌘+F, with regex and whole-word options) and go to
+  line (Ctrl/⌘+Alt+G)
+- **Completion** of C++ keywords, common standard-library names and words in
+  the file (Ctrl/⌘+Space to open it yourself)
+- **Code folding** (gutter arrows, or Ctrl+Shift+[ and ])
+- highlighting of the current line and of other occurrences of the selection
+
+**Shortcuts** in the editor header lists them all. Ctrl/⌘+Enter runs the
+program (CodeMirror's default "insert blank line" binding is replaced).
+Multi-cursor edits work in collaboration rooms and recordings too; other
+people see each person's main cursor and selection.
+
 ## Collaboration
 
 **Collaborate** in the editor's header starts a room from your current files
@@ -128,7 +150,7 @@ file's batch input are shared too. Undo only undoes your own edits.
   connections. Add a TURN server to `TURN_SERVERS` in `src/js/collab.js`.
 - Rooms work best with up to 8 people.
 
-The libraries are bundled in `src/vendors/collab/` (see its README to rebuild).
+The libraries are bundled with CodeMirror in `src/vendors/editor/` (see its README to rebuild).
 
 ## Recordings
 

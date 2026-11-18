@@ -19,7 +19,7 @@ window.CppWasmCollabInstall = function (app) {
     btn.title = 'The collaboration library didn’t load';
     return;
   }
-  const { Y, CodemirrorBinding, awarenessProtocol: A, joinRoom, selfId } = C;
+  const { Y, yCollab, awarenessProtocol: A, joinRoom, selfId } = C;
 
   const APP_ID = 'cpp-wasm-collab-v1';
   const ROOM_RE = /^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/;
@@ -142,42 +142,39 @@ window.CppWasmCollabInstall = function (app) {
     });
   }
 
-  /* ---------------- editor binding ---------------- */
-  function unbind() {
-    if (!session) return;
-    if (session.binding) { session.binding.destroy(); session.binding = null; }
-    if (session.undo) { session.undo.destroy(); session.undo = null; }
+  /* ---------------- editor binding (y-codemirror.next) ----------------
+     Each file opens as a CodeMirror state with yCollab(), which keeps the editor
+     and the shared Y.Text in sync and draws other people's cursors and
+     selections. Undo uses one Y.UndoManager per file, so it only undoes your
+     own edits and survives switching files. y-codemirror.next keeps your cursor
+     visible to others after you click away from the editor. */
+  // Cursor positions in awareness are Yjs relative positions (JSON objects; older
+  // clients sent JSON strings).
+  const relPos = (v) => Y.createRelativePositionFromJSON(typeof v === 'string' ? JSON.parse(v) : v);
+  const colorLight = (c) => c + '55';
+
+  function undoFor(id, ytext) {
+    let um = session.undos.get(id);
+    if (!um) { um = new Y.UndoManager(ytext); session.undos.set(id, um); }
+    return um;
   }
 
   function showPlaceholder(text) {
-    unbind();
-    const doc = CodeMirror.Doc(text, 'text/x-c++src');
-    app.cm.swapDoc(doc);
-    app.cm.setOption('readOnly', 'nocursor');
+    app.cm.setState(app.cm.newState(text, { readOnly: true }));
     app.setTitle(session ? 'Room ' + session.id : '');
   }
 
   function open(id, focus) {
     const m = yFile(id);
     if (!m) return;
-    unbind();
     app.setActiveId(id);
-    let doc = session.docs.get(id);
-    if (!doc) { doc = CodeMirror.Doc('', 'text/x-c++src'); session.docs.set(id, doc); }
-    app.cm.setOption('readOnly', false);
-    if (app.cm.getDoc() !== doc) app.cm.swapDoc(doc);
     const ytext = m.get('code');
-    const binding = new CodemirrorBinding(ytext, app.cm, session.awareness);
-    session.binding = binding;
-    session.undo = new Y.UndoManager(ytext, { trackedOrigins: new Set([binding]) });
-    // Keep showing my cursor and selection to others when I click outside the editor
-    // (Run, the terminal, the file list); y-codemirror would hide it on blur.
-    app.cm.off('blur', binding._blurListeer);
-    app.cm.off('swapDoc', binding._blurListeer);
+    // A fresh state each time: the shared text may have changed while the file was closed.
+    app.cm.setState(app.cm.newState(ytext.toString(), {
+      collab: yCollab(ytext, session.awareness, { undoManager: undoFor(id, ytext) }),
+    }));
     session.awareness.setLocalStateField('file', id);
     publishCursor(ytext);
-    // Draw the cursors of people who are already in this file.
-    binding._awarenessListener({ added: Array.from(session.awareness.getStates().keys()), updated: [], removed: [] });
     const f = app.getFiles().find((x) => x.id === id);
     app.setTitle(f ? f.name : '');
     $('#stdin').value = f ? f.stdin : '';
@@ -185,12 +182,24 @@ window.CppWasmCollabInstall = function (app) {
     if (focus) app.cm.focus();
   }
 
-  // Share where my cursor and selection are (y-codemirror does this on every cursor
-  // move while the editor has focus; this covers opening a file).
+  // Share where my cursor and selection are. y-codemirror.next does this on every
+  // cursor move while the editor has focus; this covers opening a file.
   function publishCursor(ytext) {
-    const cm = app.cm;
-    const rel = (which) => JSON.stringify(Y.createRelativePositionFromTypeIndex(ytext, cm.indexFromPos(cm.getCursor(which))));
-    session.awareness.setLocalStateField('cursor', { anchor: rel('anchor'), head: rel('head') });
+    const sel = app.cm.getSelection();
+    const rel = (i) => Y.relativePositionToJSON(Y.createRelativePositionFromTypeIndex(ytext, i));
+    session.awareness.setLocalStateField('cursor', { anchor: rel(sel.anchor), head: rel(sel.head) });
+  }
+
+  // Show a person's name over their caret for a moment (it otherwise appears on hover).
+  function showName(name, flash) {
+    for (const caret of app.cm.dom.querySelectorAll('.cm-ySelectionCaret')) {
+      const info = caret.querySelector('.cm-ySelectionInfo');
+      if (!info || info.textContent !== name) continue;
+      caret.classList.add('show-name');
+      if (flash) caret.classList.add('flash');
+      clearTimeout(caret._nameTimer);
+      caret._nameTimer = setTimeout(() => caret.classList.remove('show-name', 'flash'), flash ? 1800 : 2000);
+    }
   }
 
   // Scroll to someone's cursor (and open their file first if needed).
@@ -201,32 +210,13 @@ window.CppWasmCollabInstall = function (app) {
     if (st.file !== app.getActiveId()) open(st.file);
     if (!st.cursor) return;
     let pos = null;
-    try { pos = Y.createAbsolutePositionFromRelativePosition(JSON.parse(st.cursor.head), session.ydoc); } catch (e) {}
+    try { pos = Y.createAbsolutePositionFromRelativePosition(relPos(st.cursor.head), session.ydoc); } catch (e) {}
     if (!pos) return;
-    const cm = app.cm;
-    cm.scrollIntoView(cm.posFromIndex(pos.index), 80);
-    // Remote carets are drawn a moment after a file opens, so flash on the next tick.
-    setTimeout(() => {
-      const mark = session && session.binding && session.binding._cursors.get(clientId);
-      const caret = mark && mark.caret && mark.caret.replacedWith;
-      if (!caret) return;
-      caret.classList.remove('hide-name');
-      caret.classList.add('flash');
-      setTimeout(() => caret.classList.remove('flash'), 1600);
-    }, 60);
+    app.cm.scrollTo(pos.index);
+    app.cm.flash(pos.index, pos.index);
+    // Remote carets are drawn a moment after a file opens.
+    setTimeout(() => showName(st.user.name, true), 60);
   }
-
-  // Undo/redo in a room only undoes your own edits, not other people's.
-  const undoKey = (redo) => (cm) => {
-    if (!session || !session.undo) return CodeMirror.Pass;
-    cm.endOperation();
-    if (redo) session.undo.redo(); else session.undo.undo();
-    cm.startOperation();
-  };
-  app.cm.addKeyMap({
-    'Ctrl-Z': undoKey(false), 'Cmd-Z': undoKey(false),
-    'Shift-Ctrl-Z': undoKey(true), 'Shift-Cmd-Z': undoKey(true), 'Ctrl-Y': undoKey(true), 'Cmd-Y': undoKey(true),
-  });
 
   /* ---------------- joining and leaving ---------------- */
   function markSynced() {
@@ -243,12 +233,12 @@ window.CppWasmCollabInstall = function (app) {
     const yfiles = ydoc.getMap('files');
     const yorder = ydoc.getArray('order');
     const awareness = new A.Awareness(ydoc);
-    awareness.setLocalState({ user: { name: myName, color: myColor }, peer: selfId, file: null });
+    awareness.setLocalState({ user: { name: myName, color: myColor, colorLight: colorLight(myColor) }, peer: selfId, file: null });
 
     const local = app.enterRoom();
     session = {
       id, ydoc, yfiles, yorder, awareness, meta: ydoc.getMap('meta'),
-      docs: new Map(), binding: null, undo: null,
+      undos: new Map(),
       peers: new Set(), synced: false, host: !!asHost, local, lonelyTimer: 0, error: '',
       name: '',
     };
@@ -329,6 +319,13 @@ window.CppWasmCollabInstall = function (app) {
     awareness.on('change', ({ added, updated, removed }) => {
       announce(added, removed);
       if (app.rec.active) recordPresence(added.concat(updated), removed);
+      // Briefly show the name over the caret of anyone who moved in the file I have open.
+      for (const id of added.concat(updated)) {
+        const st = awareness.getStates().get(id);
+        if (id !== ydoc.clientID && st && st.user && st.file === app.getActiveId() && st.cursor) {
+          requestAnimationFrame(() => showName(st.user.name));
+        }
+      }
       // Re-render the file list only when someone else's open file, name or colour
       // changed; cursor moves alone shouldn't rebuild it (that would eat clicks).
       const key = [];
@@ -377,14 +374,14 @@ window.CppWasmCollabInstall = function (app) {
     if (!session) return;
     const s = session;
     clearTimeout(s.lonelyTimer);
-    unbind();
+    app.cm.setState(app.cm.newState(''));   // detach the editor from the room's text first
+    s.undos.forEach((um) => um.destroy());
     try { A.removeAwarenessStates(s.awareness, [s.ydoc.clientID], 'local'); } catch (e) {}
     try { s.room && s.room.leave(); } catch (e) {}
     s.awareness.destroy();
     s.ydoc.destroy();
     session = null;
     known = new Map();
-    app.cm.setOption('readOnly', false);
     app.setFileActionsEnabled(true);
     app.exitRoom(s.local);
     if (!silent) app.filesMessage('Left the room. Your own files are back.', true);
@@ -457,8 +454,8 @@ window.CppWasmCollabInstall = function (app) {
     if (!m) return null;
     const text = m.get('code');
     try {
-      const a = Y.createAbsolutePositionFromRelativePosition(JSON.parse(st.cursor.anchor), session.ydoc);
-      const h = Y.createAbsolutePositionFromRelativePosition(JSON.parse(st.cursor.head), session.ydoc);
+      const a = Y.createAbsolutePositionFromRelativePosition(relPos(st.cursor.anchor), session.ydoc);
+      const h = Y.createAbsolutePositionFromRelativePosition(relPos(st.cursor.head), session.ydoc);
       if (!a || !h || a.type !== text || h.type !== text) return null;
       return { file: st.file, anchor: a.index, head: h.index };
     } catch (e) { return null; }
@@ -498,7 +495,7 @@ window.CppWasmCollabInstall = function (app) {
     if (!v) return myName;
     myName = v;
     app.store.set('cppwasm.name', v);
-    if (session) session.awareness.setLocalStateField('user', { name: myName, color: myColor });
+    if (session) session.awareness.setLocalStateField('user', { name: myName, color: myColor, colorLight: colorLight(myColor) });
     return myName;
   }
   Object.assign(app.room, {
@@ -537,7 +534,8 @@ window.CppWasmCollabInstall = function (app) {
         if (i >= 0) session.yorder.delete(i, 1);
         session.yfiles.delete(id);
       });
-      session.docs.delete(id);
+      const um = session.undos.get(id);
+      if (um) { um.destroy(); session.undos.delete(id); }
     },
     setStdin(id, value) { const m = yFile(id); if (m && m.get('stdin') instanceof Y.Text) setYText(m.get('stdin'), value); },
     viewers(id) {
