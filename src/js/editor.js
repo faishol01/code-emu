@@ -96,6 +96,16 @@ window.CppEditor = (function () {
     },
     provide: (f) => EditorView.decorations.from(f),
   });
+  const setVizLine = StateEffect.define();
+  const vizLineField = StateField.define({
+    create: () => Decoration.none,
+    update(value, tr) {
+      value = value.map(tr.changes);
+      for (const e of tr.effects) if (e.is(setVizLine)) value = e.value;
+      return value;
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
 
   class CaretWidget extends WidgetType {
     constructor(name, color) { super(); this.name = name; this.color = color; }
@@ -191,6 +201,7 @@ window.CppEditor = (function () {
         theme,
         marksField,
         flashField,
+        vizLineField,
         EditorView.updateListener.of((u) => this.onUpdate(u)),
       ];
     }
@@ -292,6 +303,34 @@ window.CppEditor = (function () {
       this.view.dispatch({ effects: setFlash.of(Decoration.set([deco])) });
       clearTimeout(this.flashTimer);
       this.flashTimer = setTimeout(() => this.view.dispatch({ effects: setFlash.of(Decoration.none) }), 900);
+    }
+
+    // Highlights a line (1-based) or a token range { from, to } on that line for the visualizer, or clears if lineNum <= 0.
+    setHighlightedLine(lineNum, tokenRange) {
+      const doc = this.view.state.doc;
+      if (!lineNum || lineNum < 1 || lineNum > doc.lines) {
+        this.view.dispatch({ effects: setVizLine.of(Decoration.none) });
+        return;
+      }
+      const line = doc.line(lineNum);
+      const decos = [];
+
+      if (tokenRange && typeof tokenRange.from === 'number' && typeof tokenRange.to === 'number') {
+        const fromPos = Math.min(line.to, line.from + Math.max(0, tokenRange.from));
+        const toPos = Math.min(line.to, line.from + Math.max(0, tokenRange.to));
+        if (fromPos < toPos) {
+          decos.push(Decoration.mark({ class: 'viz-token-highlight' }).range(fromPos, toPos));
+        }
+      } else {
+        decos.push(Decoration.line({ class: 'viz-line-highlight' }).range(line.from));
+      }
+
+      this.view.dispatch({
+        effects: [
+          setVizLine.of(Decoration.set(decos)),
+          EditorView.scrollIntoView(line.from, { y: 'center', yMargin: 40 }),
+        ],
+      });
     }
   }
 

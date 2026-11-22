@@ -10,7 +10,7 @@
 <title>cpp.wasm: run C++ in your browser</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
 <link rel="stylesheet" href="src/vendors/ibm-plex/plex.css">
-<link rel="stylesheet" href="src/css/style.css">
+<link rel="stylesheet" href="src/css/style.css?v=1.1">
 </head>
 <body>
 
@@ -37,6 +37,7 @@
       <button type="button" id="mode-batch" aria-pressed="true">Batch input</button>
       <button type="button" id="mode-interactive" aria-pressed="false">Interactive</button>
     </div>
+    <button id="visualize" type="button" title="Step-by-step visualization"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><polygon points="6.5 5 11 8 6.5 11 6.5 5" fill="currentColor" stroke="none"/></svg><span id="visualize-label">Visualize</span></button>
     <button id="run" type="button" title="Run (Ctrl+Enter)"><span id="run-label">Run</span><kbd>⌃↵</kbd></button>
   </div>
 </header>
@@ -82,12 +83,21 @@
       <textarea id="stdin" spellcheck="false" placeholder="Type the program’s input here"></textarea>
     </section>
 
-    <section class="pane" aria-label="Output">
+    <section class="pane" id="output-pane" aria-label="Output">
       <div class="pane-head">
-        <h2 id="out-title">Terminal</h2>
+        <div class="out-tabs" role="tablist" aria-label="Output type">
+          <button type="button" class="out-tab active" id="tab-program" role="tab" aria-selected="true" aria-controls="output">
+            <span id="out-title">Program Output</span>
+          </button>
+          <button type="button" class="out-tab" id="tab-compiler" role="tab" aria-selected="false" aria-controls="compiler-output">
+            <span>Compiler Output</span>
+            <span class="out-badge" id="compiler-badge" hidden></span>
+          </button>
+        </div>
         <button type="button" id="clear">Clear</button>
       </div>
-      <pre id="output" aria-live="polite"><span class="empty">Press Run or Ctrl+Enter. The first run waits for the compiler download (a few dozen MB). After that, builds take a second or two.</span></pre>
+      <pre id="output" class="out-view active" aria-live="polite"><span class="empty">Press Run or Ctrl+Enter. The first run waits for the compiler download (a few dozen MB). After that, builds take a second or two.</span></pre>
+      <pre id="compiler-output" class="out-view" aria-live="polite" hidden><span class="empty">No compiler output. Build errors and warnings will appear here.</span></pre>
       <div class="term-input" id="term-row">
         <span class="prompt" aria-hidden="true">›</span>
         <input id="term-input" type="text" autocomplete="off" spellcheck="false" aria-label="Program input" placeholder="Run the program to type input" disabled>
@@ -95,6 +105,8 @@
       </div>
     </section>
   </div>
+
+  <div class="viz-container" id="viz-container"></div>
 </main>
 
 <section id="home" aria-labelledby="home-title">
@@ -342,12 +354,13 @@
 </footer>
 
 <script src="src/vendors/editor/editor.bundle.js"></script>
-<script src="src/js/editor.js"></script>
+<script src="src/js/editor.js?v=1.1"></script>
 
 <script src="src/vendors/fflate/fflate.min.js"></script>
 <script src="src/js/collab.js"></script>
 <script src="src/js/cpprec.js"></script>
 <script src="src/js/record.js"></script>
-<script src="src/js/app.js"></script>
+<script src="src/js/visualizer.js?v=1.2"></script>
+<script src="src/js/app.js?v=1.2"></script>
 </body>
 </html>

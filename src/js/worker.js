@@ -415,12 +415,17 @@ async function build(msg) {
     memfs.setStdin(new Uint8Array(0));
 
     let t = performance.now();
+    const optFlag = msg.opt || '-O2';
     const cc = await runTool(cache.clang, ['clang', '-cc1', '-emit-obj', ...CLANG_COMMON,
-      '-std=c++14', '-O2', '-Wall', '-o', 'main.o', '-x', 'c++', 'main.cpp']);
+      '-std=c++14', optFlag, '-Wall', '-o', 'main.o', '-x', 'c++', 'main.cpp']);
     flushDecoders();
     times.compile = performance.now() - t;
     post({ type: 'time', stage, ms: times.compile });
     if (cc !== 0) return post({ type: 'done', ok: false, stage, reason: 'compile' });
+
+    if (msg.compileOnly) {
+      return post({ type: 'done', ok: true, stage: 'compile', compileOnly: true });
+    }
 
     stage = 'link';
     post({ type: 'stage', stage });

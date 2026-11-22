@@ -3,7 +3,7 @@
 'use strict';
 
 // worker.js sits next to this script.
-const WORKER_URL = new URL('worker.js', document.currentScript.src).href;
+const WORKER_URL = new URL('worker.js?v=1.2', document.currentScript.src).href;
 
 // The toolchain files sit next to this page, in src/vendors/wasm-clang/. The path is
 // relative so the site also works from a subfolder, like a GitHub Pages project site.
@@ -23,15 +23,16 @@ const fallback = $('#fallback-editor');
 let cm = null;
 const STARTER = `#include <iostream>
 #include <string>
+using namespace std;
 
 int main() {
-    std::string name;
-    std::cout << "What's your name? ";
-    std::getline(std::cin, name);
-    std::cout << "Hello, " << name << "!\\n";
+    string name;
+    cout << "What's your name? ";
+    getline(cin, name);
+    cout << "Hello, " << name << "!\\n";
 }
 `;
-const NEW_FILE_TEMPLATE = '#include <iostream>\n\nint main() {\n    \n}\n';
+const NEW_FILE_TEMPLATE = '#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    \n}\n';
 
 if (window.CppEditor) {
   // CodeMirror 6 (through src/js/editor.js). The textarea is only the fallback.
@@ -41,6 +42,7 @@ if (window.CppEditor) {
     onRun: () => runOrStop(),
     onFormat: () => formatCode(),
     onChange(changes) {
+      if (isVisualizing) return;
       if (room.active) return;   // rooms sync and record through the shared document (collab.js)
       // Recording (local workspace): each change is applied after the previous one.
       if (rec.active && shownId) for (const c of changes) rec.code(shownId, c.pos, c.del, c.text);
@@ -136,6 +138,9 @@ function filesMessage(text, ok) {
 }
 
 function openFile(id, focusEditor) {
+  if (document.body.classList.contains('show-visualizer')) {
+    closeVisualizer();
+  }
   if (room.active) { room.ops.open(id, focusEditor); return; }
   const f = files.find((x) => x.id === id);
   if (!f) return;
@@ -616,96 +621,176 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#sho
 
 /* ---------------- output ---------------- */
 const out = $('#output');
+const compOut = $('#compiler-output');
+const tabProgram = $('#tab-program');
+const tabCompiler = $('#tab-compiler');
+const compilerBadge = $('#compiler-badge');
 const OUT_CAP = 300000;
-let outChars = 0, capped = false;
-let queue = [], scheduled = false;
-const ansi = { fg: null, bold: false, pending: '' };
 const COLORS = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
 
-function clearOutput() {
-  out.textContent = '';
-  outChars = 0; capped = false; queue = [];
-  ansi.fg = null; ansi.bold = false; ansi.pending = '';
-}
-function sys(text, tone) { queue.push({ sys: true, text, tone }); schedule(); }
-function write(text, cls) { queue.push({ text, cls }); schedule(); }
-function schedule() { if (!scheduled) { scheduled = true; requestAnimationFrame(flush); } }
+let activeOutTab = 'program';
 
-function span(text, cls) {
-  if (!text || capped) return;
-  if (outChars + text.length > OUT_CAP) {
-    text = text.slice(0, Math.max(0, OUT_CAP - outChars));
-    capped = true;
+function switchOutputTab(tab) {
+  activeOutTab = tab;
+  const isProg = tab === 'program';
+  if (tabProgram) {
+    tabProgram.classList.toggle('active', isProg);
+    tabProgram.setAttribute('aria-selected', String(isProg));
   }
-  outChars += text.length;
-  const el = document.createElement('span');
-  const classes = [cls];
-  if (ansi.bold) classes.push('b');
-  if (ansi.fg) classes.push('c-' + ansi.fg);
-  el.className = classes.join(' ');
-  el.textContent = text;
-  out.appendChild(el);
-  if (capped) {
-    const note = document.createElement('span');
-    note.className = 'o-sys';
-    note.textContent = '\nDisplay limit reached; later output is not shown.\n';
-    out.appendChild(note);
+  if (tabCompiler) {
+    tabCompiler.classList.toggle('active', !isProg);
+    tabCompiler.setAttribute('aria-selected', String(!isProg));
+  }
+
+  if (out) out.hidden = !isProg;
+  if (compOut) compOut.hidden = isProg;
+
+  if (termRow) {
+    termRow.style.display = (isProg && mode === 'interactive') ? 'flex' : 'none';
   }
 }
 
-function applySgr(codes) {
-  const list = codes === '' ? [0] : codes.split(';').map(Number);
-  for (const c of list) {
-    if (c === 0) { ansi.fg = null; ansi.bold = false; }
-    else if (c === 1) ansi.bold = true;
-    else if (c === 22) ansi.bold = false;
-    else if (c === 39) ansi.fg = null;
-    else if (c >= 30 && c <= 37) ansi.fg = COLORS[c - 30];
-    else if (c >= 90 && c <= 97) ansi.fg = COLORS[c - 90];
+if (tabProgram) tabProgram.addEventListener('click', () => switchOutputTab('program'));
+if (tabCompiler) tabCompiler.addEventListener('click', () => switchOutputTab('compiler'));
+
+function setCompilerBadge(type, text) {
+  if (!compilerBadge) return;
+  if (type === 'error') {
+    compilerBadge.textContent = text || 'Error';
+    compilerBadge.className = 'out-badge error';
+    compilerBadge.hidden = false;
+  } else if (type === 'warning') {
+    if (compilerBadge.className.includes('error') && !compilerBadge.hidden) return;
+    compilerBadge.textContent = text || 'Warning';
+    compilerBadge.className = 'out-badge warning';
+    compilerBadge.hidden = false;
+  } else {
+    compilerBadge.hidden = true;
   }
 }
 
-function writeAnsi(text, cls) {
-  text = ansi.pending + text;
-  ansi.pending = '';
-  const esc = text.lastIndexOf('\x1b');
-  if (esc !== -1 && text.length - esc < 16 && !/^\x1b\[[0-9;]*m/.test(text.slice(esc))) {
-    ansi.pending = text.slice(esc);
-    text = text.slice(0, esc);
+let scheduled = false;
+function scheduleFlush() {
+  if (!scheduled) {
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      progStream.flush();
+      compStream.flush();
+    });
   }
-  const re = /\x1b\[([0-9;]*)m/g;
-  let last = 0, m;
-  while ((m = re.exec(text))) {
-    span(text.slice(last, m.index), cls);
-    applySgr(m[1]);
-    last = re.lastIndex;
-  }
-  span(text.slice(last), cls);
 }
 
-function flush() {
-  scheduled = false;
-  const hint = out.querySelector('.empty');
-  if (hint && queue.length) hint.remove();
-  const nearBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 40;
-  for (const item of queue) {
-    if (item.sys) {
-      if (out.lastChild && !/\n$/.test(out.lastChild.textContent)) {
-        out.appendChild(document.createTextNode('\n'));
-      }
-      const el = document.createElement('span');
-      el.className = 'o-sys' + (item.tone ? ' ' + item.tone : '');
-      el.textContent = item.text + '\n';
-      out.appendChild(el);
-    } else {
-      writeAnsi(item.text, item.cls);
+function createOutputStream(el, defaultEmptyHtml) {
+  let chars = 0, capped = false;
+  let queue = [];
+  const ansi = { fg: null, bold: false, pending: '' };
+
+  function clear() {
+    el.innerHTML = defaultEmptyHtml;
+    chars = 0; capped = false; queue = [];
+    ansi.fg = null; ansi.bold = false; ansi.pending = '';
+  }
+
+  function span(text, cls) {
+    if (!text || capped) return;
+    if (chars + text.length > OUT_CAP) {
+      text = text.slice(0, Math.max(0, OUT_CAP - chars));
+      capped = true;
+    }
+    chars += text.length;
+    const s = document.createElement('span');
+    const classes = [cls];
+    if (ansi.bold) classes.push('b');
+    if (ansi.fg) classes.push('c-' + ansi.fg);
+    s.className = classes.join(' ');
+    s.textContent = text;
+    el.appendChild(s);
+    if (capped) {
+      const note = document.createElement('span');
+      note.className = 'o-sys';
+      note.textContent = '\nDisplay limit reached; later output is not shown.\n';
+      el.appendChild(note);
     }
   }
-  queue = [];
-  if (nearBottom) out.scrollTop = out.scrollHeight;
+
+  function applySgr(codes) {
+    const list = codes === '' ? [0] : codes.split(';').map(Number);
+    for (const c of list) {
+      if (c === 0) { ansi.fg = null; ansi.bold = false; }
+      else if (c === 1) ansi.bold = true;
+      else if (c === 22) ansi.bold = false;
+      else if (c === 39) ansi.fg = null;
+      else if (c >= 30 && c <= 37) ansi.fg = COLORS[c - 30];
+      else if (c >= 90 && c <= 97) ansi.fg = COLORS[c - 90];
+    }
+  }
+
+  function writeAnsi(text, cls) {
+    text = ansi.pending + text;
+    ansi.pending = '';
+    const esc = text.lastIndexOf('\x1b');
+    if (esc !== -1 && text.length - esc < 16 && !/^\x1b\[[0-9;]*m/.test(text.slice(esc))) {
+      ansi.pending = text.slice(esc);
+      text = text.slice(0, esc);
+    }
+    const re = /\x1b\[([0-9;]*)m/g;
+    let last = 0, m;
+    while ((m = re.exec(text))) {
+      span(text.slice(last, m.index), cls);
+      applySgr(m[1]);
+      last = re.lastIndex;
+    }
+    span(text.slice(last), cls);
+  }
+
+  function flush() {
+    const hint = el.querySelector('.empty');
+    if (hint && queue.length) hint.remove();
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    for (const item of queue) {
+      if (item.sys) {
+        if (el.lastChild && !/\n$/.test(el.lastChild.textContent)) {
+          el.appendChild(document.createTextNode('\n'));
+        }
+        const s = document.createElement('span');
+        s.className = 'o-sys' + (item.tone ? ' ' + item.tone : '');
+        s.textContent = item.text + '\n';
+        el.appendChild(s);
+      } else {
+        writeAnsi(item.text, item.cls);
+      }
+    }
+    queue = [];
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+  }
+
+  return {
+    write(text, cls) { queue.push({ text, cls }); scheduleFlush(); },
+    sys(text, tone) { queue.push({ sys: true, text, tone }); scheduleFlush(); },
+    clear,
+    flush,
+    hasContent() { return chars > 0 || queue.length > 0; }
+  };
 }
 
-$('#clear').addEventListener('click', clearOutput);
+const progStream = createOutputStream(out, '<span class="empty">Press Run or Ctrl+Enter. The first run waits for the compiler download (a few dozen MB). After that, builds take a second or two.</span>');
+const compStream = createOutputStream(compOut, '<span class="empty">No compiler output. Build errors and warnings will appear here.</span>');
+
+function clearOutput() { progStream.clear(); }
+function clearCompilerOutput() { compStream.clear(); setCompilerBadge(null); }
+function sys(text, tone) { progStream.sys(text, tone); }
+function write(text, cls) { progStream.write(text, cls); }
+function sysCompiler(text, tone) { compStream.sys(text, tone); }
+function writeCompiler(text, cls = 'o-cc') { compStream.write(text, cls); }
+
+$('#clear').addEventListener('click', () => {
+  if (activeOutTab === 'compiler') {
+    clearCompilerOutput();
+  } else {
+    clearOutput();
+  }
+});
 
 /* ---------------- input mode ---------------- */
 const canInteract = !!(window.crossOriginIsolated && typeof SharedArrayBuffer === 'function');
@@ -722,7 +807,10 @@ function setMode(m) {
   document.body.classList.toggle('mode-interactive', mode === 'interactive');
   $('#mode-interactive').setAttribute('aria-pressed', String(mode === 'interactive'));
   $('#mode-batch').setAttribute('aria-pressed', String(mode === 'batch'));
-  $('#out-title').textContent = mode === 'interactive' ? 'Terminal' : 'Output';
+  $('#out-title').textContent = mode === 'interactive' ? 'Terminal' : 'Program Output';
+  if (activeOutTab === 'program' && termRow) {
+    termRow.style.display = mode === 'interactive' ? 'flex' : 'none';
+  }
 }
 if (!canInteract) {
   const b = $('#mode-interactive');
@@ -960,15 +1048,27 @@ function onMessage(ev) {
       if (current) setStep(current, 'done');
       current = m.stage;
       setStep(m.stage, 'active', '');
-      if (m.stage === 'run') clockStart();
+      if (m.stage === 'run') {
+        clockStart();
+        switchOutputTab('program');
+      }
       break;
     case 'time':
       steps[m.stage].querySelector('.time').textContent = fmt(m.ms);
       break;
     case 'out':
       if (m.channel === 'sys') sys(m.text);
-      else if (m.channel === 'compiler') write(m.text, 'o-cc');
-      else write(m.text, m.fd === 2 ? 'o-err' : 'o-out');
+      else if (m.channel === 'compiler') {
+        writeCompiler(m.text, 'o-cc');
+        if (/error:/i.test(m.text)) {
+          setCompilerBadge('error', 'Error');
+        } else if (/warning:/i.test(m.text)) {
+          setCompilerBadge('warning', 'Warning');
+        }
+      } else {
+        if (isVisualizing) vizOutputCollector += m.text;
+        else write(m.text, m.fd === 2 ? 'o-err' : 'o-out');
+      }
       break;
     case 'stdin-request':
       onStdinRequest();
@@ -981,32 +1081,266 @@ function onMessage(ev) {
 
 function onDone(m) {
   if (m.ok) {
+    if (isVisualizing && vizPhase === 'checking') {
+      vizPhase = 'running';
+      vizOutputCollector = '';
+      setStep('compile', 'done');
+      proceedToVizRun();
+      return;
+    }
     setStep('run', 'done');
     sys('Exited with code ' + m.exitCode + '.', m.exitCode === 0 ? 'good' : 'bad');
   } else {
     setStep(m.stage, 'fail');
-    if (m.reason === 'compile') sys('Compilation failed. Fix the errors above and run again.', 'bad');
-    else if (m.reason === 'link') sys('Linking failed. A function may be declared but never defined, or need a library this toolchain lacks.', 'bad');
-    else if (m.reason === 'trap') sys('The program crashed: ' + m.message + (/unreachable/.test(m.message) ? ' (often abort(), a failed assert, or a throw)' : ''), 'bad');
-    else if (m.stage !== 'toolchain') sys('Stopped during ' + m.stage + ': ' + m.message, 'bad');
+    if (m.reason === 'compile') {
+      sysCompiler('Compilation failed. Fix the errors above and run again.', 'bad');
+      sys('Compilation failed. Check the Compiler Output tab for details.', 'bad');
+      setCompilerBadge('error', 'Error');
+      switchOutputTab('compiler');
+    } else if (m.reason === 'link') {
+      sysCompiler('Linking failed. A function may be declared but never defined, or need a library this toolchain lacks.', 'bad');
+      sys('Linking failed. Check the Compiler Output tab for details.', 'bad');
+      setCompilerBadge('error', 'Error');
+      switchOutputTab('compiler');
+    } else if (m.reason === 'trap') {
+      sys('The program crashed: ' + m.message + (/unreachable/.test(m.message) ? ' (often abort(), a failed assert, or a throw)' : ''), 'bad');
+    } else if (m.stage !== 'toolchain') {
+      sys('Stopped during ' + m.stage + ': ' + m.message, 'bad');
+    }
+    if (isVisualizing) {
+      vizOutputCollector = '';
+      vizPendingCode = null;
+      vizPhase = 'idle';
+    }
   }
-  finishRun();
+  finishRun(m.ok);
 }
 
-function finishRun() {
+let isVisualizing = false;
+let vizPhase = 'idle';
+let vizPendingCode = null;
+let vizOutputCollector = '';
+let vizInstance = null;
+let originalCodeBeforeViz = null;
+let lastFormattedCode = null;
+
+function finishRun(ok = true) {
   clockStop();
   running = false;
   current = null;
   resetTerminal(false);
   $('#run').classList.remove('stop');
   $('#run-label').textContent = 'Run';
+  if (isVisualizing) {
+    if (ok && vizOutputCollector) {
+      handleVizOutput(vizOutputCollector);
+    } else {
+      closeVisualizer(true);
+    }
+  }
+}
+
+function handleVizOutput(rawOutput) {
+  if (!window.CppVisualizer) {
+    closeVisualizer(true);
+    return;
+  }
+  try {
+    const { events, programOutput, initialGlobals } = window.CppVisualizer.parseTrace(rawOutput);
+    if (!events.length) {
+      sys('No visualization events captured. Check program syntax or step limit.', 'bad');
+      closeVisualizer(true);
+      return;
+    }
+    document.body.classList.add('show-visualizer');
+    $('#visualize').classList.remove('processing');
+    $('#visualize').classList.add('active', 'stop');
+    $('#visualize-label').textContent = 'Stop Viz';
+    $('#visualize').title = 'Stop visualization';
+
+    // Show the formatted code version as readonly in the editor
+    if (lastFormattedCode) {
+      if (cm) {
+        cm.replaceAll(lastFormattedCode);
+        cm.setReadOnly(true);
+      } else {
+        fallback.value = lastFormattedCode;
+        fallback.readOnly = true;
+      }
+    }
+
+    if (!vizInstance) {
+      const vizContainer = $('#viz-container');
+      vizInstance = window.CppVisualizer.create(vizContainer);
+      vizInstance.onStepChange((step, total, line, tokenRange) => {
+        if (cm) cm.setHighlightedLine(line, tokenRange);
+      });
+      vizInstance.onClose(() => {
+        closeVisualizer();
+      });
+    }
+    vizInstance.load(events, null, programOutput, $('#stdin').value, initialGlobals);
+    if (cm) cm.refresh();
+  } catch (err) {
+    console.error('Visualization load error:', err);
+    sys('Visualization error: ' + (err && err.message ? err.message : String(err)), 'bad');
+    closeVisualizer(true);
+  }
+}
+
+function closeVisualizer(keepOutput = false) {
+  document.body.classList.remove('show-visualizer');
+  $('#visualize').classList.remove('active', 'stop', 'processing');
+  $('#visualize-label').textContent = 'Visualize';
+  $('#visualize').title = 'Step-by-step visualization';
+  isVisualizing = false;
+  vizPhase = 'idle';
+  vizPendingCode = null;
+
+  // Restore the original code and make editor editable again
+  if (originalCodeBeforeViz !== null) {
+    if (cm) {
+      cm.setReadOnly(false);
+      cm.replaceAll(originalCodeBeforeViz);
+    } else {
+      fallback.readOnly = false;
+      fallback.value = originalCodeBeforeViz;
+    }
+    const f = activeFile();
+    if (f) {
+      f.code = originalCodeBeforeViz;
+      saveFiles();
+    }
+    originalCodeBeforeViz = null;
+  } else if (cm) {
+    cm.setReadOnly(false);
+  } else {
+    fallback.readOnly = false;
+  }
+  lastFormattedCode = null;
+
+  if (cm) {
+    cm.setHighlightedLine(0);
+    cm.refresh();
+  }
+  if (!keepOutput) {
+    clearOutput();
+    clearCompilerOutput();
+  }
+  if (vizInstance && typeof vizInstance.clear === 'function') {
+    try { vizInstance.clear(); } catch (_) {}
+  }
+}
+
+function toggleVisualizer() {
+  if (document.body.classList.contains('show-visualizer')) {
+    closeVisualizer();
+    return;
+  }
+  if (running && isVisualizing) {
+    stop();
+    return;
+  }
+  visualizeOrStop();
+}
+
+async function visualizeOrStop() {
+  if (running) return stop();
+  if (!activeFile()) { filesMessage('There’s no file to run yet.'); return; }
+  if (!worker && !spawn()) return;
+
+  clearOutput();
+  clearCompilerOutput();
+  switchOutputTab('program');
+  for (const s of ['compile', 'link', 'run']) setStep(s, null, '');
+  running = true;
+  isVisualizing = true;
+  vizPhase = 'checking';
+  vizOutputCollector = '';
+  $('#visualize').classList.remove('active', 'stop');
+  $('#visualize').classList.add('processing');
+  $('#visualize-label').textContent = 'Processing';
+  $('#visualize').title = 'Processing visualization...';
+
+  const userCode = getCode();
+  originalCodeBeforeViz = userCode;
+  lastFormattedCode = userCode;
+  vizPendingCode = userCode;
+
+  resetTerminal(false);
+  // Step 1: Run compilation on original code first
+  worker.postMessage({
+    type: 'run',
+    compileOnly: true,
+    code: userCode,
+    filename: activeFile().name,
+    opt: '-O0',
+  });
+}
+
+async function proceedToVizRun() {
+  const userCode = vizPendingCode || getCode();
+  vizPendingCode = null;
+  vizPhase = 'running';
+  vizOutputCollector = '';
+
+  let codeToRun = userCode;
+  try {
+    let formattedCode = userCode;
+    try {
+      const mod = await loadFormatter();
+      if (mod && typeof mod.format === 'function') {
+        const activeName = activeFile() ? activeFile().name : 'main.cpp';
+        formattedCode = mod.format(userCode, activeName, FORMAT_STYLE);
+      }
+    } catch (fmtErr) {
+      console.warn('Visualization format note (using original code):', fmtErr);
+    }
+
+    lastFormattedCode = formattedCode;
+
+    if (window.CppVisualizer && window.CppVisualizer.instrumentCode) {
+      const activeName = activeFile() ? activeFile().name : 'main.cpp';
+      codeToRun = window.CppVisualizer.instrumentCode(formattedCode, activeName);
+    } else {
+      codeToRun = formattedCode;
+    }
+  } catch (err) {
+    console.error('Visualization instrumentation error:', err);
+    sys('Visualization error: ' + (err && err.message ? err.message : String(err)), 'bad');
+    closeVisualizer(true);
+    running = false;
+    return;
+  }
+
+  // Clear compile output from step 1 before compiling and running visualization version
+  clearOutput();
+  clearCompilerOutput();
+  switchOutputTab('program');
+  for (const s of ['compile', 'link', 'run']) setStep(s, null, '');
+  resetTerminal(false);
+  worker.postMessage({
+    type: 'run',
+    compileOnly: false,
+    code: codeToRun,
+    filename: activeFile() ? activeFile().name : 'main.cpp',
+    stdin: $('#stdin').value,
+    sab: null,
+    opt: '-O0',
+  });
 }
 
 function runOrStop() {
   if (running) return stop();
+  if (document.body.classList.contains('show-visualizer')) {
+    closeVisualizer();
+  }
+  isVisualizing = false;
   if (!activeFile()) { filesMessage('There’s no file to run yet.'); return; }
   if (!worker && !spawn()) return;
   clearOutput();
+  clearCompilerOutput();
+  switchOutputTab('program');
   for (const s of ['compile', 'link', 'run']) setStep(s, null, '');
   running = true;
   $('#run').classList.add('stop');
@@ -1033,6 +1367,7 @@ function stop() {
 }
 
 $('#run').addEventListener('click', runOrStop);
+$('#visualize').addEventListener('click', toggleVisualizer);
 document.addEventListener('keydown', (e) => {
   if (view !== 'workspace') return;
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !(cm && cm.hasFocus)) { e.preventDefault(); runOrStop(); }
