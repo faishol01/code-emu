@@ -28,7 +28,7 @@ window.CppWasmCollabInstall = function (app) {
   const MAX_PEERS = 8;
   // Optional TURN servers for networks that block direct peer-to-peer connections, e.g.
   // [{ urls: 'turn:turn.example.com:3478', username: 'user', credential: 'secret' }]
-  const TURN_SERVERS = [{urls: "stun:stun.l.google.com:19302"},{urls: "stun:stun1.l.google.com:19302"},{urls: "stun:stun2.l.google.com:19302"},{urls: "stun:stun3.l.google.com:19302"},{urls: "stun:stun4.l.google.com:19302"}];
+  const TURN_SERVERS = [{urls: 'turn:free.expressturn.com:3478', username: '000000002110778448', credential: 'smIcFYM+MYeTj0oYHjWLolZGZQ0='}];
   const toU8 = (d) => (d instanceof Uint8Array ? d : new Uint8Array(d));
 
   function hashString(s) {
