@@ -183,7 +183,7 @@ var CppVisualizer = (function () {
 }
 .viz-vars-table td:first-child { font-weight: 600; color: var(--ink); }
 .viz-vars-table td:nth-child(2) { color: var(--t-type); font-size: 11.5px; }
-.viz-vars-table td:nth-child(3) { color: var(--t-num); word-break: break-all; white-space: normal; }
+.viz-vars-table td:nth-child(3) { color: var(--t-num); word-break: break-all; white-space: pre-wrap; }
 .viz-vars-table tr { transition: background-color .15s ease; border-radius: 4px; }
 .viz-vars-empty {
   font-size: 12px;
@@ -1210,6 +1210,14 @@ var CppVisualizer = (function () {
 
     // ── Rendering ─────────────────────
 
+    function formatVarValue(val) {
+      if (typeof val !== 'string') return String(val || '');
+      if (val.startsWith('[[') && val.endsWith(']]')) {
+        return val.replace(/\], ?\[/g, '],\n [');
+      }
+      return val;
+    }
+
     function render(state) {
       var cs = state.callStack;
       var changedVars = state.changedVars;
@@ -1321,7 +1329,7 @@ var CppVisualizer = (function () {
             gTdVal.className = 'viz-var-val';
             var gValSpan = document.createElement('span');
             gValSpan.className = 'viz-val-text';
-            gValSpan.textContent = gv.val;
+            gValSpan.textContent = formatVarValue(gv.val);
             gTdVal.appendChild(gValSpan);
 
             var gTargetHook = document.createElement('span');
@@ -1380,7 +1388,7 @@ var CppVisualizer = (function () {
               tdVal.className = 'viz-var-val';
               var valSpan = document.createElement('span');
               valSpan.className = 'viz-val-text';
-              valSpan.textContent = v.val;
+              valSpan.textContent = formatVarValue(v.val);
               tdVal.appendChild(valSpan);
 
               if (v.refVar) {
@@ -2163,10 +2171,56 @@ var CppVisualizer = (function () {
     for (const d of decls) {
       const varMatch = d.match(/^[*&]?\s*([a-zA-Z_0-9]+)/);
       if (varMatch && !reserved.has(varMatch[1]) && !/^\d+$/.test(varMatch[1])) {
-        vars.push({ name: varMatch[1], isArray: d.includes('[') });
+        const dimMatches = d.match(/\[[^\]]*\]/g);
+        const dimCount = dimMatches ? dimMatches.length : 0;
+        const isArray = dimCount > 0;
+        const arrType = isArray ? (type + '[]'.repeat(dimCount)) : type;
+        vars.push({ name: varMatch[1], isArray: isArray, dimCount: dimCount, arrType: arrType });
       }
     }
     return vars.length ? { type: type, vars: vars } : null;
+  }
+
+  function parseParam(pStr) {
+    let pTrim = pStr.trim();
+    if (!pTrim || pTrim === 'void') return null;
+    const eqIdx = pTrim.indexOf('=');
+    if (eqIdx !== -1) pTrim = pTrim.slice(0, eqIdx).trim();
+
+    // Reference to array: type (&name)[dim1][dim2]...
+    const refArrMatch = pTrim.match(/^(.+?)\s*\(\s*&\s*([a-zA-Z_0-9]+)\s*\)\s*(\[[^\]]*\](?:\s*\[[^\]]*\])*)$/);
+    if (refArrMatch) {
+      const rawType = refArrMatch[1].trim();
+      const name = refArrMatch[2].trim();
+      const brackets = refArrMatch[3].match(/\[[^\]]*\]/g);
+      const dims = '[]'.repeat(brackets ? brackets.length : 1);
+      return { type: rawType + '&' + dims, name: name, isArray: true };
+    }
+
+    // Standard array param: type name[dim1][dim2]...
+    const arrMatch = pTrim.match(/^(.+?)\s+([*&]?)\s*([a-zA-Z_0-9]+)\s*(\[[^\]]*\](?:\s*\[[^\]]*\])*)$/);
+    if (arrMatch) {
+      const baseType = (arrMatch[1] + (arrMatch[2] ? ' ' + arrMatch[2] : '')).trim();
+      const name = arrMatch[3].trim();
+      const brackets = arrMatch[4].match(/\[[^\]]*\]/g);
+      const dims = '[]'.repeat(brackets ? brackets.length : 1);
+      let firstDim = null;
+      if (brackets && brackets.length > 0) {
+        const dMatch = brackets[0].match(/\[\s*(\d+)\s*\]/);
+        if (dMatch) firstDim = parseInt(dMatch[1], 10);
+      }
+      return { type: baseType + dims, name: name, isArray: true, firstDim: firstDim };
+    }
+
+    // Scalar, pointer, or normal reference: type [*&]? name
+    const scalarMatch = pTrim.match(/^(.+?)\s*([*&]?)\s*([a-zA-Z_0-9]+)$/);
+    if (scalarMatch) {
+      const type = (scalarMatch[1] + (scalarMatch[2] ? ' ' + scalarMatch[2] : '')).trim();
+      const name = scalarMatch[3].trim();
+      return { type: type, name: name, isArray: false };
+    }
+
+    return null;
   }
 
   function instrumentCode(userCode, filename) {
@@ -2205,6 +2259,9 @@ var CppVisualizer = (function () {
       '',
       '  template<typename T>',
       '  inline std::string to_s(const T& v);',
+      '',
+      '  template<typename T, size_t N>',
+      '  inline std::string to_s(const T (&arr)[N]);',
       '',
       '  inline std::string to_s(bool v) { return v ? "true" : "false"; }',
       '  inline std::string to_s(char v) { return std::string("\'") + v + "\'"; }',
@@ -2287,7 +2344,7 @@ var CppVisualizer = (function () {
       '',
       '  template<typename T, size_t N>',
       '  inline uintptr_t get_addr(const T (&arr)[N]) {',
-      '    return reinterpret_cast<uintptr_t>(arr);',
+      '    return reinterpret_cast<uintptr_t>(std::addressof(arr));',
       '  }',
       '',
       '  inline void scope_exit(int ln, const char* vars_json) {',
@@ -2355,6 +2412,20 @@ var CppVisualizer = (function () {
       '    return ss.str();',
       '  }',
       '',
+      '  template<typename T>',
+      '  inline std::string arr_to_s(T* ptr, size_t size) {',
+      '    if (!ptr || size == 0) return "[]";',
+      '    std::ostringstream ss;',
+      '    ss << "[";',
+      '    for (size_t i = 0; i < size && i < 15; ++i) {',
+      '      if (i > 0) ss << ", ";',
+      '      ss << to_s(ptr[i]);',
+      '    }',
+      '    if (size > 15) ss << ", ...";',
+      '    ss << "]";',
+      '    return ss.str();',
+      '  }',
+      '',
       '  inline std::string arr_to_s(const char* ptr, size_t size) {',
       '    if (!ptr || size == 0) return "\\"\\"";',
       '    std::ostringstream ss;',
@@ -2370,25 +2441,252 @@ var CppVisualizer = (function () {
       '    return ss.str();',
       '  }',
       '',
+      '  template<typename T, size_t N>',
+      '  inline std::string serialize_arr(const T (&arr)[N], size_t) {',
+      '    return to_s(arr);',
+      '  }',
+      '',
+      '  template<typename T, size_t N>',
+      '  inline std::string serialize_arr(T (&arr)[N], size_t) {',
+      '    return to_s(arr);',
+      '  }',
+      '',
       '  template<typename T>',
-      '  inline void arr_decl(const char* name, const char* type, const T* ptr, size_t size, int ln) {',
+      '  inline std::string serialize_arr(T* ptr, size_t size) {',
+      '    if (!ptr || size == 0) return "[]";',
       '    std::ostringstream ss;',
-      '    ss << "{\\"e\\":\\"var_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type << "\\",\\"val\\":\\"" << escape_json(arr_to_s(ptr, size)) << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr) << "\\",\\"line\\":" << ln << "}";',
+      '    ss << "[";',
+      '    for (size_t i = 0; i < size && i < 15; ++i) {',
+      '      if (i > 0) ss << ", ";',
+      '      ss << to_s(ptr[i]);',
+      '    }',
+      '    if (size > 15) ss << ", ...";',
+      '    ss << "]";',
+      '    return ss.str();',
+      '  }',
+      '',
+      '  template<typename T>',
+      '  inline std::string serialize_arr(const T* ptr, size_t size) {',
+      '    if (!ptr || size == 0) return "[]";',
+      '    std::ostringstream ss;',
+      '    ss << "[";',
+      '    for (size_t i = 0; i < size && i < 15; ++i) {',
+      '      if (i > 0) ss << ", ";',
+      '      ss << to_s(ptr[i]);',
+      '    }',
+      '    if (size > 15) ss << ", ...";',
+      '    ss << "]";',
+      '    return ss.str();',
+      '  }',
+      '',
+      '  inline std::string serialize_arr(const char* ptr, size_t size) {',
+      '    if (!ptr || size == 0) return "\\"\\"";',
+      '    std::ostringstream ss;',
+      '    ss << "\\"";',
+      '    for (size_t i = 0; i < size && i < 30; ++i) {',
+      '      if (ptr[i] == \'\\0\') break;',
+      '      if (ptr[i] == \'"\') ss << "\\\\\\\"";',
+      '      else if (ptr[i] == \'\\\\\') ss << "\\\\\\\\";',
+      '      else if (ptr[i] >= 32 && ptr[i] <= 126) ss << ptr[i];',
+      '      else ss << \' \';',
+      '    }',
+      '    ss << "\\"";',
+      '    return ss.str();',
+      '  }',
+      '',
+      '  inline std::string serialize_arr(char* ptr, size_t size) {',
+      '    return serialize_arr(const_cast<const char*>(ptr), size);',
+      '  }',
+      '',
+      '  template<typename T>',
+      '  inline std::string serialize_arr(const T& val, size_t) {',
+      '    return to_s(val);',
+      '  }',
+      '',
+      '  template<typename T, size_t N>',
+      '  inline uintptr_t get_arr_addr(const T (&arr)[N]) {',
+      '    return reinterpret_cast<uintptr_t>(std::addressof(arr));',
+      '  }',
+      '',
+      '  template<typename T, size_t N>',
+      '  inline uintptr_t get_arr_addr(T (&arr)[N]) {',
+      '    return reinterpret_cast<uintptr_t>(std::addressof(arr));',
+      '  }',
+      '',
+      '  template<typename T>',
+      '  inline uintptr_t get_arr_addr(const T* ptr) {',
+      '    return reinterpret_cast<uintptr_t>(ptr);',
+      '  }',
+      '',
+      '  template<typename T>',
+      '  inline uintptr_t get_arr_addr(T* ptr) {',
+      '    return reinterpret_cast<uintptr_t>(ptr);',
+      '  }',
+      '',
+      '  template<typename T>',
+      '  inline uintptr_t get_arr_addr(const T& val) {',
+      '    return reinterpret_cast<uintptr_t>(std::addressof(val));',
+      '  }',
+      '',
+      '  inline std::string serialize_vla(const void* ptr, const char* type, size_t size) {',
+      '    if (!ptr || size == 0) return "[]";',
+      '    std::string t = type ? type : "";',
+      '    bool is_2d = (t.find("[][]") != std::string::npos);',
+      '    if (t.empty() || t.find("int") == 0 || t.find("short") == 0) {',
+      '      const int* p = static_cast<const int*>(ptr);',
+      '      if (is_2d) {',
+      '        std::ostringstream ss; ss << "[";',
+      '        for (size_t i = 0; i < size && i < 15; ++i) {',
+      '          if (i > 0) ss << ", ";',
+      '          ss << "[";',
+      '          for (size_t j = 0; j < size && j < 15; ++j) {',
+      '            if (j > 0) ss << ", ";',
+      '            ss << p[i * size + j];',
+      '          }',
+      '          if (size > 15) ss << ", ...";',
+      '          ss << "]";',
+      '        }',
+      '        if (size > 15) ss << ", ...";',
+      '        ss << "]";',
+      '        return ss.str();',
+      '      } else {',
+      '        std::ostringstream ss; ss << "[";',
+      '        for (size_t i = 0; i < size && i < 15; ++i) {',
+      '          if (i > 0) ss << ", ";',
+      '          ss << p[i];',
+      '        }',
+      '        if (size > 15) ss << ", ...";',
+      '        ss << "]";',
+      '        return ss.str();',
+      '      }',
+      '    } else if (t.find("long") == 0) {',
+      '      const long long* p = static_cast<const long long*>(ptr);',
+      '      if (is_2d) {',
+      '        std::ostringstream ss; ss << "[";',
+      '        for (size_t i = 0; i < size && i < 15; ++i) {',
+      '          if (i > 0) ss << ", ";',
+      '          ss << "[";',
+      '          for (size_t j = 0; j < size && j < 15; ++j) {',
+      '            if (j > 0) ss << ", ";',
+      '            ss << p[i * size + j];',
+      '          }',
+      '          if (size > 15) ss << ", ...";',
+      '          ss << "]";',
+      '        }',
+      '        if (size > 15) ss << ", ...";',
+      '        ss << "]";',
+      '        return ss.str();',
+      '      } else {',
+      '        std::ostringstream ss; ss << "[";',
+      '        for (size_t i = 0; i < size && i < 15; ++i) {',
+      '          if (i > 0) ss << ", ";',
+      '          ss << p[i];',
+      '        }',
+      '        if (size > 15) ss << ", ...";',
+      '        ss << "]";',
+      '        return ss.str();',
+      '      }',
+      '    } else if (t.find("double") == 0) {',
+      '      const double* p = static_cast<const double*>(ptr);',
+      '      std::ostringstream ss; ss << "[";',
+      '      for (size_t i = 0; i < size && i < 15; ++i) {',
+      '        if (i > 0) ss << ", ";',
+      '        ss << p[i];',
+      '      }',
+      '      if (size > 15) ss << ", ...";',
+      '      ss << "]"; return ss.str();',
+      '    } else if (t.find("float") == 0) {',
+      '      const float* p = static_cast<const float*>(ptr);',
+      '      std::ostringstream ss; ss << "[";',
+      '      for (size_t i = 0; i < size && i < 15; ++i) {',
+      '        if (i > 0) ss << ", ";',
+      '        ss << p[i];',
+      '      }',
+      '      if (size > 15) ss << ", ...";',
+      '      ss << "]"; return ss.str();',
+      '    } else if (t.find("char") == 0) {',
+      '      const char* p = static_cast<const char*>(ptr);',
+      '      return arr_to_s(p, size);',
+      '    } else if (t.find("bool") == 0) {',
+      '      const bool* p = static_cast<const bool*>(ptr);',
+      '      std::ostringstream ss; ss << "[";',
+      '      for (size_t i = 0; i < size && i < 15; ++i) {',
+      '        if (i > 0) ss << ", ";',
+      '        ss << (p[i] ? "true" : "false");',
+      '      }',
+      '      if (size > 15) ss << ", ...";',
+      '      ss << "]"; return ss.str();',
+      '    }',
+      '    return "[]";',
+      '  }',
+      '',
+      '  inline void arr_decl(const char* name, const char* type, const void* ptr, size_t size, int ln) {',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"var_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, type, size)) << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr) << "\\",\\"line\\":" << ln << "}";',
+      '    emit(ss.str());',
+      '  }',
+      '',
+      '  inline void arr_global_decl(const char* name, const char* type, const void* ptr, size_t size, int ln) {',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"global_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, type, size)) << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr) << "\\",\\"line\\":" << ln << "}";',
+      '    emit(ss.str());',
+      '  }',
+      '',
+      '  inline void arr_set(const char* name, const void* ptr, size_t size, int ln) {',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"var_set\\",\\"name\\":\\"" << name << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, "", size)) << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr) << "\\",\\"line\\":" << ln << "}";',
+      '    emit(ss.str());',
+      '  }',
+      '',
+      '  template<typename E>',
+      '  inline void arr_io_input_event(const char* base_name, const void* ptr, size_t size, const char* expr_name, const E& expr_val, int ln, int c_from, int c_to) {',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"io\\",\\"io\\":\\"input\\",\\"name\\":\\"" << base_name',
+      '       << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, "", size))',
+      '       << "\\",\\"expr\\":\\"" << expr_name',
+      '       << "\\",\\"inputVal\\":\\"" << escape_json(to_s(expr_val))',
+      '       << "\\",\\"isGetline\\":false"',
+      '       << ",\\"colFrom\\":" << c_from',
+      '       << ",\\"colTo\\":" << c_to',
+      '       << ",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr) << "\\""',
+      '       << ",\\"line\\":" << ln << "}";',
+      '    emit(ss.str());',
+      '  }',
+      '',
+      '  template<typename T, typename S>',
+      '  inline void arr_decl(const char* name, const char* type, T&& arr, S size, int ln) {',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"var_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type << "\\",\\"val\\":\\"" << escape_json(serialize_arr(arr, size)) << "\\",\\"addr\\":\\"" << get_arr_addr(arr) << "\\",\\"line\\":" << ln << "}";',
       '    emit(ss.str());',
       '  }',
       '',
       '  template<typename T>',
-      '  inline void arr_global_decl(const char* name, const char* type, const T* ptr, size_t size, int ln) {',
+      '  inline void arr_decl(const char* name, const char* type, T&& arr, int ln) {',
+      '    arr_decl(name, type, std::forward<T>(arr), 0, ln);',
+      '  }',
+      '',
+      '  template<typename T, typename S>',
+      '  inline void arr_global_decl(const char* name, const char* type, T&& arr, S size, int ln) {',
       '    std::ostringstream ss;',
-      '    ss << "{\\"e\\":\\"global_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type << "\\",\\"val\\":\\"" << escape_json(arr_to_s(ptr, size)) << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr) << "\\",\\"line\\":" << ln << "}";',
+      '    ss << "{\\"e\\":\\"global_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type << "\\",\\"val\\":\\"" << escape_json(serialize_arr(arr, size)) << "\\",\\"addr\\":\\"" << get_arr_addr(arr) << "\\",\\"line\\":" << ln << "}";',
       '    emit(ss.str());',
       '  }',
       '',
       '  template<typename T>',
-      '  inline void arr_set(const char* name, const T* ptr, size_t size, int ln) {',
+      '  inline void arr_global_decl(const char* name, const char* type, T&& arr, int ln) {',
+      '    arr_global_decl(name, type, std::forward<T>(arr), 0, ln);',
+      '  }',
+      '',
+      '  template<typename T, typename S>',
+      '  inline void arr_set(const char* name, T&& arr, S size, int ln) {',
       '    std::ostringstream ss;',
-      '    ss << "{\\"e\\":\\"var_set\\",\\"name\\":\\"" << name << "\\",\\"val\\":\\"" << escape_json(arr_to_s(ptr, size)) << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr) << "\\",\\"line\\":" << ln << "}";',
+      '    ss << "{\\"e\\":\\"var_set\\",\\"name\\":\\"" << name << "\\",\\"val\\":\\"" << escape_json(serialize_arr(arr, size)) << "\\",\\"addr\\":\\"" << get_arr_addr(arr) << "\\",\\"line\\":" << ln << "}";',
       '    emit(ss.str());',
+      '  }',
+      '',
+      '  template<typename T>',
+      '  inline void arr_set(const char* name, T&& arr, int ln) {',
+      '    arr_set(name, std::forward<T>(arr), 0, ln);',
       '  }',
       '',
       '  template<typename T>',
@@ -2420,17 +2718,17 @@ var CppVisualizer = (function () {
       '    emit(ss.str());',
       '  }',
       '',
-      '  template<typename T, typename E>',
-      '  inline void arr_io_input_event(const char* base_name, const T* ptr, size_t size, const char* expr_name, const E& expr_val, int ln, int c_from, int c_to) {',
+      '  template<typename T, typename S, typename E>',
+      '  inline void arr_io_input_event(const char* base_name, T&& arr, S size, const char* expr_name, const E& expr_val, int ln, int c_from, int c_to) {',
       '    std::ostringstream ss;',
       '    ss << "{\\"e\\":\\"io\\",\\"io\\":\\"input\\",\\"name\\":\\"" << base_name',
-      '       << "\\",\\"val\\":\\"" << escape_json(arr_to_s(ptr, size))',
+      '       << "\\",\\"val\\":\\"" << escape_json(serialize_arr(arr, size))',
       '       << "\\",\\"expr\\":\\"" << expr_name',
       '       << "\\",\\"inputVal\\":\\"" << escape_json(to_s(expr_val))',
       '       << "\\",\\"isGetline\\":false"',
       '       << ",\\"colFrom\\":" << c_from',
       '       << ",\\"colTo\\":" << c_to',
-      '       << ",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr) << "\\""',
+      '       << ",\\"addr\\":\\"" << get_arr_addr(arr) << "\\""',
       '       << ",\\"line\\":" << ln << "}";',
       '    emit(ss.str());',
       '  }',
@@ -2588,7 +2886,8 @@ var CppVisualizer = (function () {
         if (dm) {
           for (const v of dm.vars) {
             if (v.isArray) knownArrays.add(v.name);
-            globalVars.push({ name: v.name, type: dm.type + (v.isArray ? '[]' : ''), line: pi + 1, isArray: v.isArray });
+            const actualType = v.arrType || (dm.type + (v.isArray ? '[]' : ''));
+            globalVars.push({ name: v.name, type: actualType, line: pi + 1, isArray: v.isArray });
           }
         }
       }
@@ -2598,7 +2897,10 @@ var CppVisualizer = (function () {
       if (!pList.length) return '"[]"';
       const parts = pList.map((p, idx) => {
         const sep = idx === 0 ? '' : ',';
-        return `std::string("${sep}{\\"name\\":\\"${p.name}\\",\\"type\\":\\"${p.type}\\",\\"addr\\":\\"") + std::to_string(__viz::get_addr(${p.name})) + std::string("\\",\\"val\\":\\"") + __viz::escape_json(__viz::to_s(${p.name})) + "\\"}"`;
+        const valExpr = (p.isArray && p.firstDim)
+          ? `__viz::arr_to_s(${p.name}, ${p.firstDim})`
+          : `__viz::to_s(${p.name})`;
+        return `std::string("${sep}{\\"name\\":\\"${p.name}\\",\\"type\\":\\"${p.type}\\",\\"addr\\":\\"") + std::to_string(__viz::get_addr(${p.name})) + std::string("\\",\\"val\\":\\"") + __viz::escape_json(${valExpr}) + "\\"}"`;
       });
       return `std::string("[") + ` + parts.join(' + ') + ` + "]"`;
     };
@@ -2623,12 +2925,10 @@ var CppVisualizer = (function () {
         if (paramsStr && paramsStr !== 'void') {
           const parts = paramsStr.split(',');
           for (const p of parts) {
-            const pTrim = p.trim();
-            const pMatch = pTrim.match(/^(.+?)\s*([*&]?)\s*([a-zA-Z_0-9]+)(?:\[\s*\])?(?:\s*=\s*[^,]+)?$/);
-            if (pMatch) {
-              const pType = (pMatch[1] + (pMatch[2] ? ' ' + pMatch[2] : '')).trim();
-              const pName = pMatch[3].trim();
-              params.push({ type: pType, name: pName });
+            const pObj = parseParam(p);
+            if (pObj) {
+              params.push(pObj);
+              if (pObj.isArray) knownArrays.add(pObj.name);
             }
           }
         }
@@ -2671,12 +2971,10 @@ var CppVisualizer = (function () {
         if (paramsStr && paramsStr !== 'void') {
           const parts = paramsStr.split(',');
           for (const p of parts) {
-            const pTrim = p.trim();
-            const pMatch = pTrim.match(/^(.+?)\s*([*&]?)\s*([a-zA-Z_0-9]+)(?:\[\s*\])?(?:\s*=\s*[^,]+)?$/);
-            if (pMatch) {
-              const pType = (pMatch[1] + (pMatch[2] ? ' ' + pMatch[2] : '')).trim();
-              const pName = pMatch[3].trim();
-              params.push({ type: pType, name: pName });
+            const pObj = parseParam(p);
+            if (pObj) {
+              params.push(pObj);
+              if (pObj.isArray) knownArrays.add(pObj.name);
             }
           }
         }
@@ -3034,7 +3332,8 @@ var CppVisualizer = (function () {
           }
           if (v.isArray) {
             knownArrays.add(v.name);
-            outLines.push(`    __viz::arr_decl("${v.name}", "${declMatch.type}[]", ${v.name}, sizeof(${v.name})/sizeof(${v.name}[0]), ${lineNum});`);
+            const actualType = v.arrType || (declMatch.type + '[]');
+            outLines.push(`    __viz::arr_decl("${v.name}", "${actualType}", ${v.name}, sizeof(${v.name})/sizeof(${v.name}[0]), ${lineNum});`);
           } else {
             outLines.push(`    __viz::var_decl("${v.name}", "${declMatch.type}", ${v.name}, ${lineNum});`);
           }
