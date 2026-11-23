@@ -248,8 +248,6 @@ var CppVisualizer = (function () {
 
   // ── Trace parsing ─────────────────────────────────────────────────────
 
-  var VIZ_PREFIX = '__VIZ__';
-
   /**
    * Parse program stdout: extract __VIZ__ lines and inline markers into events, return clean output and initialGlobals.
    * @param {string} outputText

@@ -256,18 +256,13 @@
 
     <h2>Compiler and runtime</h2>
       <div class="credit">
-        <div><a class="name" href="https://github.com/binji/wasm-clang" target="_blank" rel="noopener">wasm-clang</a> <span class="by">by Ben Smith (binji)</span></div>
-        <span class="license">Apache 2.0</span>
-        <p>The prebuilt Clang, wasm-ld, in-memory file system and sysroot this app downloads. Ben originally published them on binji.github.io; cpp.wasm loads copies from <code>src/vendors/wasm-clang/</code> on its own server. The worker’s WASI host, file-system glue and tar reader are adapted from its <code>shared.js</code>. Ben presented the project at CppCon 2019.</p>
+        <div><a class="name" href="https://github.com/live-codes/clang-wasm" target="_blank" rel="noopener">@live-codes/clang-wasm</a> <span class="by">by the LiveCodes project</span></div>
+        <span class="license">MIT</span>
+        <p>The prebuilt Clang, wasm-ld, in-memory file system and sysroot this app downloads. Built from LLVM 22 compiled to WebAssembly; cpp.wasm loads it from <code>https://cdn.jsdelivr.net/npm/@live-codes/clang-wasm@0.3.0/</code> or <code>src/vendors/wasm-clang/</code>.</p>
       </div>
       <div class="credit">
-        <div><a class="name" href="https://github.com/binji/llvm-project" target="_blank" rel="noopener">memfs</a> <span class="by">by Ben Smith, in his LLVM fork</span></div>
-        <span class="license">Apache 2.0</span>
-        <p>The in-memory file system, itself compiled to WebAssembly, that holds your source file, the standard headers and the build output while clang and wasm-ld run.</p>
-      </div>
-      <div class="credit">
-        <div><a class="name" href="https://llvm.org" target="_blank" rel="noopener">Clang and LLD 8.0.1</a> <span class="by">by the LLVM project</span></div>
-        <span class="license">UIUC (NCSA)</span>
+        <div><a class="name" href="https://llvm.org" target="_blank" rel="noopener">Clang and LLD 22.1.8</a> <span class="by">by the LLVM project</span></div>
+        <span class="license">Apache 2.0 with LLVM Exception</span>
         <p>The C++ compiler and the WebAssembly linker. Both run here as WebAssembly programs themselves.</p>
       </div>
       <div class="credit">
@@ -341,7 +336,7 @@
   <details id="settings">
     <summary>Toolchain source</summary>
     <div class="popover">
-      <p>Clang 8, wasm-ld, the in-memory file system and the libc++ sysroot are fetched from this folder: by default <code>src/vendors/wasm-clang/</code> next to this page. It must contain the files <code>clang</code>, <code>lld</code>, <code>memfs</code> and <code>sysroot.tar</code>. A full URL to another server also works if that server allows cross-origin requests.</p>
+      <p>Clang 22, wasm-ld, the in-memory file system and the libc++ sysroot are fetched from this folder or URL: by default <code>https://cdn.jsdelivr.net/npm/@live-codes/clang-wasm@0.3.0/</code> (or local <code>src/vendors/wasm-clang/</code>). It provides <code>clang</code>, <code>lld</code>, <code>memfs</code> and <code>sysroot.tar</code>.</p>
       <div class="row">
         <input id="base-url" type="text" spellcheck="false" autocomplete="off" aria-label="Toolchain folder or URL">
         <button type="button" id="base-default">Default</button>

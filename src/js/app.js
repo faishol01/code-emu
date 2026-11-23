@@ -3,12 +3,12 @@
 'use strict';
 
 // worker.js sits next to this script.
-const WORKER_URL = new URL('worker.js?v=1.2', document.currentScript.src).href;
+const WORKER_URL = new URL('worker.js?v=1.3', document.currentScript.src).href;
 
-// The toolchain files sit next to this page, in src/vendors/wasm-clang/. The path is
-// relative so the site also works from a subfolder, like a GitHub Pages project site.
-const DEFAULT_BASE = 'src/vendors/wasm-clang/';
-const OLD_DEFAULT_BASES = ['https://binji.github.io/wasm-clang/', '/wasm-clang/', '/src/wasm-clang/', '/src/vendors/wasm-clang/'];
+// The toolchain files can be loaded from the @live-codes/clang-wasm package on CDN
+// or from the local copy in src/vendors/wasm-clang/.
+const DEFAULT_BASE = 'https://cdn.jsdelivr.net/npm/@live-codes/clang-wasm@0.3.0/';
+const OLD_DEFAULT_BASES = ['https://binji.github.io/wasm-clang/', '/wasm-clang/', '/src/wasm-clang/', 'src/vendors/wasm-clang/', '/src/vendors/wasm-clang/'];
 // Resolve here so the worker gets a full URL (it would resolve relative paths against src/js/).
 const resolveBase = (b) => new URL(b, location.href).href;
 const $ = (s) => document.querySelector(s);
@@ -1032,8 +1032,8 @@ function onMessage(ev) {
     case 'ready':
       toolchain = 'ready';
       setStep('toolchain', 'done', m.ms > 300 ? fmt(m.ms) : 'cached');
-      status('Compiler ready: clang -std=c++14 -O2 -Wall  |  ' + TIME_LIMIT_MS / 1000 + ' s limit', 'ready');
-      statusEl.title = 'Clang 8.0.1 with libc++, targeting wasm32-wasi';
+      status('Compiler ready: clang -std=c++17 -O2 -Wall  |  ' + TIME_LIMIT_MS / 1000 + ' s limit', 'ready');
+      statusEl.title = 'Clang 22 with libc++, targeting wasm32-wasi';
       break;
     case 'fatal':
       toolchain = 'error';

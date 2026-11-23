@@ -64,13 +64,18 @@ const PRELUDE =
   '#line 1 "__FILE__"\n';
 
 const CLANG_COMMON = [
+  '-triple', 'wasm32-wasi',
+  '-emit-obj',
   '-disable-free',
+  '-fgnuc-version=4.2.1',
   '-isysroot', '/',
+  '-resource-dir', '/lib/clang/22',
   '-internal-isystem', '/include/c++/v1',
+  '-internal-isystem', '/include/wasm32-wasi',
   '-internal-isystem', '/include',
+  '-internal-isystem', '/lib/clang/22/include',
   '-internal-isystem', '/lib/clang/8.0.1/include',
   '-ferror-limit', '19',
-  '-fmessage-length', '80',
   '-fcolor-diagnostics',
 ];
 
@@ -216,7 +221,11 @@ class App {
       fd === 0 ? memfs.host_read(fd, iovs, iovs_len, nread) : memfsRead(fd, iovs, iovs_len, nread);
     // Anything else the program imports gets a stub returning ENOSYS instead of failing to load.
     const wasi = new Proxy(base, { get: (t, p) => (p in t ? t[p] : () => 52) });
-    const instance = await WebAssembly.instantiate(this.module, { wasi_unstable: wasi, env: {} });
+    const instance = await WebAssembly.instantiate(this.module, {
+      wasi_unstable: wasi,
+      wasi_snapshot_preview1: wasi,
+      env: {}
+    });
     this.exports = instance.exports;
     this.mem = new Memory(this.exports.memory);
     memfs.hostMem = this.mem;
@@ -284,58 +293,139 @@ class App {
 class Tar {
   constructor(buffer) { this.u8 = new Uint8Array(buffer); this.offset = 0; }
   str(len) { const s = readStr(this.u8, this.offset, len); this.offset += len; return s; }
-  oct(len) { return parseInt(this.str(len), 8); }
+  oct(len) { return parseInt(this.str(len), 8) || 0; }
   align() { this.offset = (this.offset + 511) & ~511; }
   entry() {
     if (this.offset + 512 > this.u8.length) return null;
-    const e = { filename: this.str(100) };
+    const filename = this.str(100);
     this.str(24); // mode, owner, group
-    e.size = this.oct(12);
+    const size = this.oct(12);
     this.str(20); // mtime, checksum
-    e.type = this.str(1);
+    const type = this.str(1);
     this.str(100); // linkname
-    if (this.str(8) !== 'ustar  ') return null;
-    this.str(32 + 32 + 8 + 8 + 155);
+    if (this.str(8) !== 'ustar  ' && this.str(8) !== 'ustar\0') {
+      if (!filename) return null;
+    }
+    this.str(32 + 32 + 8 + 8);
+    const prefix = this.str(155);
     this.align();
-    if (e.type === '0') {
-      e.contents = this.u8.subarray(this.offset, this.offset + e.size);
-      this.offset += e.size;
+    let contents = null;
+    if (size > 0 || type === '0' || type === '') {
+      contents = this.u8.subarray(this.offset, this.offset + size);
+      this.offset += size;
       this.align();
     }
-    return e;
+    const fullPath = prefix ? (prefix + '/' + filename) : filename;
+    return { filename: fullPath, size, type, contents };
   }
   untar(fs) {
     let e;
     while ((e = this.entry())) {
-      if (e.type === '0') fs.addFile(e.filename, e.contents);
-      else if (e.type === '5') fs.addDirectory(e.filename);
+      if (e.type === '0' || e.type === '') {
+        if (e.contents) fs.addFile(e.filename, e.contents);
+      } else if (e.type === '5' || e.filename.endsWith('/')) {
+        const dir = e.filename.replace(/\/+$/, '');
+        if (dir) fs.addDirectory(dir);
+      }
     }
   }
 }
 
-async function download(name) {
-  const url = BASE + name;
-  let res;
-  try { res = await fetch(url); }
-  catch (e) { throw new Error('Could not download ' + url + '. Check your connection, or set a different toolchain source.'); }
-  if (!res.ok) throw new Error('Downloading ' + url + ' failed (HTTP ' + res.status + ').');
-  if (!res.body || !res.body.getReader) return res.arrayBuffer();
-  const reader = res.body.getReader();
-  const chunks = [];
-  let loaded = 0, last = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    loaded += value.length;
-    const now = performance.now();
-    if (now - last > 120) { last = now; post({ type: 'progress', name, loaded }); }
+function getCandidateUrls(base, name) {
+  const b = base.endsWith('/') ? base : base + '/';
+  const urls = [];
+  const isLiveCodes = b.includes('@live-codes/clang-wasm');
+
+  if (isLiveCodes) {
+    let assetBase = b;
+    if (!assetBase.includes('/assets/')) {
+      assetBase = new URL('assets/', b).href;
+    }
+    if (name === 'sysroot.tar') {
+      urls.push(new URL('bin/sysroot.tar.gz', assetBase).href);
+      urls.push(new URL('sysroot.tar.gz', assetBase).href);
+      urls.push(new URL('sysroot.tar', assetBase).href);
+    } else {
+      urls.push(new URL('bin/' + name + '.wasm.gz', assetBase).href);
+      urls.push(new URL(name + '.wasm.gz', assetBase).href);
+      urls.push(new URL(name + '.wasm', assetBase).href);
+      urls.push(new URL(name, assetBase).href);
+    }
   }
-  post({ type: 'progress', name, loaded, done: true });
-  const out = new Uint8Array(loaded);
-  let o = 0;
-  for (const c of chunks) { out.set(c, o); o += c.length; }
-  return out.buffer;
+
+  if (name === 'sysroot.tar') {
+    urls.push(b + 'bin/sysroot.tar.gz');
+    urls.push(b + 'sysroot.tar.gz');
+    urls.push(b + 'sysroot.tar');
+  } else {
+    urls.push(b + 'bin/' + name + '.wasm.gz');
+    urls.push(b + name + '.wasm.gz');
+    urls.push(b + name + '.wasm');
+    urls.push(b + name);
+  }
+
+  return [...new Set(urls)];
+}
+
+async function decompressGzip(u8) {
+  if (typeof DecompressionStream === 'function') {
+    const ds = new DecompressionStream('gzip');
+    const stream = new Response(new Blob([u8])).body.pipeThrough(ds);
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+  return u8;
+}
+
+async function download(name) {
+  const candidates = getCandidateUrls(BASE, name);
+  let res = null;
+  let lastErr = null;
+
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) {
+        res = r;
+        break;
+      }
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+
+  if (!res) {
+    throw new Error('Could not download ' + name + ' from ' + BASE + '. Check your connection, or set a different toolchain source.');
+  }
+
+  let buf;
+  if (!res.body || !res.body.getReader) {
+    buf = await res.arrayBuffer();
+  } else {
+    const reader = res.body.getReader();
+    const chunks = [];
+    let loaded = 0, last = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      loaded += value.length;
+      const now = performance.now();
+      if (now - last > 120) { last = now; post({ type: 'progress', name, loaded }); }
+    }
+    post({ type: 'progress', name, loaded, done: true });
+    const out = new Uint8Array(loaded);
+    let o = 0;
+    for (const c of chunks) { out.set(c, o); o += c.length; }
+    buf = out.buffer;
+  }
+
+  let u8 = new Uint8Array(buf);
+  if (u8.length > 2 && u8[0] === 0x1f && u8[1] === 0x8b) {
+    u8 = await decompressGzip(u8);
+    buf = u8.buffer;
+  }
+
+  return buf;
 }
 
 function share(name, value) {
@@ -416,8 +506,9 @@ async function build(msg) {
 
     let t = performance.now();
     const optFlag = msg.opt || '-O2';
-    const cc = await runTool(cache.clang, ['clang', '-cc1', '-emit-obj', ...CLANG_COMMON,
-      '-std=c++14', optFlag, '-Wall', '-o', 'main.o', '-x', 'c++', 'main.cpp']);
+    const stdFlag = msg.std ? (msg.std.startsWith('-std=') ? msg.std : '-std=' + msg.std) : '-std=c++17';
+    const cc = await runTool(cache.clang, ['clang', '-cc1', ...CLANG_COMMON,
+      stdFlag, optFlag, '-Wall', '-o', 'main.o', '-x', 'c++', 'main.cpp']);
     flushDecoders();
     times.compile = performance.now() - t;
     post({ type: 'time', stage, ms: times.compile });
@@ -431,9 +522,11 @@ async function build(msg) {
     post({ type: 'stage', stage });
     t = performance.now();
     const lib = 'lib/wasm32-wasi';
-    const ld = await runTool(cache.lld, ['wasm-ld', '--no-threads', '--export-dynamic',
+    const ld = await runTool(cache.lld, ['wasm-ld', '--export-dynamic',
       '-z', 'stack-size=' + (1024 * 1024), '-L' + lib, lib + '/crt1.o', 'main.o',
-      '-lc', '-lc++', '-lc++abi', '-lcanvas', '-o', 'main.wasm']);
+      '-lc', '-lc++', '-lc++abi',
+      '-Llib/clang/22/lib/wasi', '-lclang_rt.builtins-wasm32',
+      '-o', 'main.wasm']);
     flushDecoders();
     times.link = performance.now() - t;
     post({ type: 'time', stage, ms: times.link });

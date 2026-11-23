@@ -412,19 +412,6 @@ body.mode-interactive .term-input { display: flex; }
   display: none !important;
 }
 
-#output {
-  flex: 1;
-  margin: 0;
-  padding: 10px 14px 16px;
-  overflow: auto;
-  font-family: var(--mono);
-  font-size: 13.5px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: var(--panel-2);
-}
-#output .empty { color: var(--muted); font-family: var(--sans); white-space: normal; }
 .o-sys { color: var(--muted); font-family: var(--sans); font-size: 12.5px; }
 .o-sys.bad { color: var(--fail); }
 .o-sys.good { color: var(--ok); }
