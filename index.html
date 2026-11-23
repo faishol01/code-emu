@@ -47,6 +47,8 @@
     <div class="pane-head">
       <h2>Files</h2>
       <div class="files-actions">
+        <button type="button" class="icon-btn" id="save-collab-to-local" title="Save all files to local workspace" hidden><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.5 12.5h-9a1 1 0 01-1-1v-9a1 1 0 011-1h6.5l3.5 3.5v6.5a1 1 0 01-1 1z"/><path d="M4 1.5v3h5v-3M4.5 12.5v-4h5v4"/></svg></button>
+        <button type="button" class="icon-btn" id="import-from-local" title="Import file from local workspace" hidden><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 11.5v-8a1 1 0 011-1h3l1.5 1.5h4.5a1 1 0 011 1v6.5a1 1 0 01-1 1h-9a1 1 0 01-1-1z"/><path d="M7 6v4M5 8l2-2 2 2"/></svg></button>
         <button type="button" class="icon-btn" id="import-zip" title="Import files from a zip"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9.5V2M4 4.8L7 2l3 2.8M2 9.5v2.5h10V9.5"/></svg></button>
         <button type="button" class="icon-btn" id="export-zip" title="Export all files as a zip"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 2v7.5M4 6.7L7 9.5l3-2.8M2 9.5v2.5h10V9.5"/></svg></button>
         <button type="button" class="icon-btn" id="new-file" title="New file"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M7 2v10M2 7h10"/></svg></button>
@@ -357,6 +359,19 @@
   </details>
   </div>
 </footer>
+
+<dialog id="import-local-dialog" class="modal-dialog" aria-labelledby="import-local-title">
+  <div class="modal-head">
+    <h3 id="import-local-title">Import from local workspace</h3>
+    <button type="button" class="icon-btn modal-close" id="import-local-close" title="Close"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 2.5l9 9M11.5 2.5l-9 9"/></svg></button>
+  </div>
+  <p class="modal-desc">Select files from your local workspace to add to this room:</p>
+  <div class="modal-body" id="import-local-list"></div>
+  <div class="modal-foot">
+    <button type="button" class="btn" id="import-local-cancel">Cancel</button>
+    <button type="button" class="btn primary" id="import-local-confirm" disabled>Import selected</button>
+  </div>
+</dialog>
 
 <script src="src/vendors/editor/editor.bundle.js"></script>
 <script src="src/js/editor.js?v=1.1"></script>

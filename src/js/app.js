@@ -102,7 +102,7 @@ const activeFile = () => files.find((f) => f.id === activeId);
   try { data = JSON.parse(store.get('cppwasm.files', 'null')); } catch (e) {}
   if (data && Array.isArray(data.files)) {
     files = data.files.filter((f) => f && typeof f.id === 'string' && NAME_RE.test(f.name || ''))
-      .map((f) => ({ id: f.id, name: f.name, code: String(f.code || ''), stdin: String(f.stdin || '') }));
+      .map((f) => ({ id: f.id, name: f.name, code: String(f.code || ''), stdin: String(f.stdin || ''), roomSource: f.roomSource || undefined, collabId: f.collabId || undefined }));
     activeId = data.active;
     lastEdited = Number(data.updated) || 0;
   }
@@ -460,6 +460,288 @@ zipInput.addEventListener('change', () => {
 });
 $('#import-zip').addEventListener('click', () => chooseZip('workspace'));
 $('#export-zip').addEventListener('click', exportZip);
+
+// Tracks collab file id -> local file id so repeated saves update content rather than creating duplicates.
+const collabFileMap = new Map();
+
+// Copies or updates all files from the collaboration room into the local workspace.
+function addCollabFilesToLocal() {
+  if (!room.active) {
+    filesMessage('You must be in collaboration mode to save files to local workspace.');
+    return [];
+  }
+  if (!files.length) {
+    filesMessage('No files in collaboration workspace to save.');
+    return [];
+  }
+
+  const currentRoom = (room.id && room.id()) || (location.hash.match(/^#room-([A-Za-z0-9-]+)/) ? location.hash.match(/^#room-([A-Za-z0-9-]+)/)[1].toLowerCase() : '');
+
+  // Retrieve the stashed local workspace (or load from store if missing)
+  if (!roomStash) {
+    roomStash = { files: [], activeId: null, docs: new Map() };
+  }
+  if (!roomStash.files || !roomStash.files.length) {
+    let data = null;
+    try { data = JSON.parse(store.get('cppwasm.files', 'null')); } catch (e) {}
+    if (data && Array.isArray(data.files)) {
+      roomStash.files = data.files.filter((f) => f && typeof f.id === 'string' && NAME_RE.test(f.name || ''))
+        .map((f) => ({ id: f.id, name: f.name, code: String(f.code || ''), stdin: String(f.stdin || ''), roomSource: f.roomSource, collabId: f.collabId }));
+      roomStash.activeId = data.active;
+    }
+  }
+  if (!roomStash.files || !roomStash.files.length) {
+    roomStash.files = [{ id: newId(), name: 'main.cpp', code: STARTER, stdin: '' }];
+    roomStash.activeId = roomStash.files[0].id;
+  }
+
+  const taken = new Set(roomStash.files.map((f) => f.name.toLowerCase()));
+  let addedCount = 0;
+  let updatedCount = 0;
+
+  const now = new Date();
+  const yy = String(now.getFullYear()).slice(-2);
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const prefix = `${yy}${mm}${dd}-`;
+
+  for (const f of files) {
+    let existing = null;
+    if (collabFileMap.has(f.id)) {
+      const localId = collabFileMap.get(f.id);
+      existing = roomStash.files.find((x) => x.id === localId);
+    }
+    if (!existing && f.id) {
+      existing = roomStash.files.find((x) => x.collabId === f.id && (!x.roomSource || x.roomSource === currentRoom));
+    }
+
+    const dot = f.name.lastIndexOf('.');
+    const origStem = dot >= 0 ? f.name.slice(0, dot) : f.name;
+    const ext = dot >= 0 ? f.name.slice(dot) : '';
+    const baseStem = prefix + origStem;
+    const baseAttempt = baseStem.slice(0, Math.max(1, 64 - ext.length)) + ext;
+
+    if (!existing) {
+      const match = roomStash.files.find((x) => x.name.toLowerCase() === baseAttempt.toLowerCase());
+      if (match) {
+        // If file name exists, check the room source: same room -> update content
+        if (match.roomSource && match.roomSource === currentRoom) {
+          existing = match;
+        }
+        // Different room source -> do not match; will create new file with counter
+      }
+    }
+
+    if (existing) {
+      existing.code = String(f.code || '');
+      existing.stdin = String(f.stdin || '');
+      existing.roomSource = currentRoom;
+      existing.collabId = f.id;
+      collabFileMap.set(f.id, existing.id);
+
+      // If renamed in the collaboration room, update local name if target is free
+      if (existing.name.toLowerCase() !== baseAttempt.toLowerCase() && !taken.has(baseAttempt.toLowerCase())) {
+        taken.delete(existing.name.toLowerCase());
+        existing.name = baseAttempt;
+        taken.add(baseAttempt.toLowerCase());
+      }
+      updatedCount++;
+      continue;
+    }
+
+    let targetName;
+    if (!taken.has(baseAttempt.toLowerCase())) {
+      targetName = baseAttempt;
+      taken.add(targetName.toLowerCase());
+    } else {
+      let counter = 1;
+      while (true) {
+        const counterStr = '-' + counter;
+        const maxStem = Math.max(1, 64 - ext.length - counterStr.length);
+        const candidate = baseStem.slice(0, maxStem) + counterStr + ext;
+        if (!taken.has(candidate.toLowerCase())) {
+          targetName = candidate;
+          taken.add(targetName.toLowerCase());
+          break;
+        }
+        counter++;
+      }
+    }
+
+    const newRecord = {
+      id: newId(),
+      name: targetName,
+      code: String(f.code || ''),
+      stdin: String(f.stdin || ''),
+      roomSource: currentRoom,
+      collabId: f.id,
+    };
+    roomStash.files.push(newRecord);
+    collabFileMap.set(f.id, newRecord.id);
+    addedCount++;
+  }
+
+  // Persist updated local workspace to localStorage
+  workspaceActive = true;
+  lastEdited = Date.now();
+  store.set('cppwasm.files', JSON.stringify({
+    active: roomStash.activeId || roomStash.files[0].id,
+    updated: lastEdited,
+    files: roomStash.files,
+  }));
+
+  let msg;
+  if (addedCount > 0 && updatedCount === 0) {
+    msg = 'Added ' + plural(addedCount, 'file') + ' to local workspace.';
+  } else if (updatedCount > 0 && addedCount === 0) {
+    msg = 'Updated ' + plural(updatedCount, 'file') + ' in local workspace.';
+  } else {
+    msg = 'Saved ' + (addedCount + updatedCount) + ' files (' + addedCount + ' added, ' + updatedCount + ' updated) to local workspace.';
+  }
+  filesMessage(msg, true);
+  return roomStash.files;
+}
+
+const saveCollabBtn = $('#save-collab-to-local');
+if (saveCollabBtn) saveCollabBtn.addEventListener('click', addCollabFilesToLocal);
+
+// Retrieve local workspace files (used when importing from local workspace into collab room).
+function getLocalWorkspaceFiles() {
+  if (roomStash && Array.isArray(roomStash.files) && roomStash.files.length) {
+    return roomStash.files;
+  }
+  let data = null;
+  try { data = JSON.parse(store.get('cppwasm.files', 'null')); } catch (e) {}
+  if (data && Array.isArray(data.files)) {
+    return data.files.filter((f) => f && typeof f.id === 'string' && NAME_RE.test(f.name || ''))
+      .map((f) => ({ id: f.id, name: f.name, code: String(f.code || ''), stdin: String(f.stdin || '') }));
+  }
+  return [];
+}
+
+const importLocalDialog = $('#import-local-dialog');
+const importLocalList = $('#import-local-list');
+const importLocalConfirm = $('#import-local-confirm');
+const importLocalCancel = $('#import-local-cancel');
+const importLocalClose = $('#import-local-close');
+const importFromLocalBtn = $('#import-from-local');
+
+function openImportLocalDialog() {
+  if (!room.active || !importLocalDialog) return;
+  const localFiles = getLocalWorkspaceFiles();
+  if (importLocalList) importLocalList.innerHTML = '';
+
+  if (!localFiles.length) {
+    const emptyP = document.createElement('p');
+    emptyP.className = 'modal-empty';
+    emptyP.textContent = 'No files found in local workspace.';
+    if (importLocalList) importLocalList.appendChild(emptyP);
+    if (importLocalConfirm) importLocalConfirm.disabled = true;
+  } else {
+    for (const f of localFiles) {
+      const item = document.createElement('label');
+      item.className = 'import-local-item';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'import-local-check';
+      cb.value = f.id;
+      cb.addEventListener('change', updateImportConfirmState);
+
+      const info = document.createElement('div');
+      info.className = 'import-local-info';
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'import-local-name';
+      nameSpan.textContent = f.name;
+
+      const lines = (f.code ? f.code.split('\n').length : 1);
+      const metaSpan = document.createElement('span');
+      metaSpan.className = 'import-local-meta';
+      metaSpan.textContent = plural(lines, 'line');
+
+      info.append(nameSpan, metaSpan);
+
+      const singleBtn = document.createElement('button');
+      singleBtn.type = 'button';
+      singleBtn.className = 'btn small import-single-btn';
+      singleBtn.textContent = 'Import';
+      singleBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        importLocalFilesToCollab([f.id]);
+        closeImportLocalDialog();
+      });
+
+      item.append(cb, info, singleBtn);
+      if (importLocalList) importLocalList.appendChild(item);
+    }
+    updateImportConfirmState();
+  }
+
+  if (typeof importLocalDialog.showModal === 'function') {
+    importLocalDialog.showModal();
+  } else {
+    importLocalDialog.hidden = false;
+  }
+}
+
+function updateImportConfirmState() {
+  if (!importLocalConfirm || !importLocalList) return;
+  const checked = importLocalList.querySelectorAll('.import-local-check:checked');
+  importLocalConfirm.disabled = checked.length === 0;
+  importLocalConfirm.textContent = checked.length > 1 ? 'Import ' + checked.length + ' files' : 'Import selected';
+}
+
+function closeImportLocalDialog() {
+  if (!importLocalDialog) return;
+  if (typeof importLocalDialog.close === 'function') {
+    importLocalDialog.close();
+  } else {
+    importLocalDialog.hidden = true;
+  }
+}
+
+function importLocalFilesToCollab(ids) {
+  if (!room.active || !room.ops) {
+    filesMessage('You must be in an active collaboration room to import files.');
+    return;
+  }
+  const localFiles = getLocalWorkspaceFiles();
+  const toImport = localFiles.filter((f) => ids.includes(f.id));
+  if (!toImport.length) return;
+
+  const records = toImport.map((f) => ({
+    name: f.name,
+    code: f.code,
+    stdin: f.stdin,
+  }));
+
+  const newIds = room.ops.addFiles(records);
+  if (newIds && newIds.length) {
+    queueMicrotask(() => openFile(newIds[0]));
+  }
+  filesMessage('Imported ' + plural(toImport.length, 'file') + ' from local workspace.', true);
+}
+
+if (importFromLocalBtn) importFromLocalBtn.addEventListener('click', openImportLocalDialog);
+if (importLocalClose) importLocalClose.addEventListener('click', closeImportLocalDialog);
+if (importLocalCancel) importLocalCancel.addEventListener('click', closeImportLocalDialog);
+if (importLocalConfirm) {
+  importLocalConfirm.addEventListener('click', () => {
+    if (!importLocalList) return;
+    const checked = Array.from(importLocalList.querySelectorAll('.import-local-check:checked')).map((c) => c.value);
+    if (checked.length) {
+      importLocalFilesToCollab(checked);
+      closeImportLocalDialog();
+    }
+  });
+}
+if (importLocalDialog) {
+  importLocalDialog.addEventListener('click', (e) => {
+    if (e.target === importLocalDialog) closeImportLocalDialog();
+  });
+}
 
 function dropTarget(el, onFile) {
   const isFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
@@ -1546,21 +1828,35 @@ const collabApi = {
   setActiveId: (id) => { activeId = id; },
   renderFiles: () => renderFiles(),
   setTitle: (t) => { $('#file-title').textContent = t; },
-  setFileActionsEnabled: (on) => { for (const id of ['#new-file', '#import-zip']) $(id).disabled = !on; },
+  setFileActionsEnabled: (on) => { for (const id of ['#new-file', '#import-zip', '#save-collab-to-local', '#import-from-local']) { const el = $(id); if (el) el.disabled = !on; } },
+  addCollabFilesToLocal,
+  openImportLocalDialog,
+  importLocalFilesToCollab,
   // Put the local workspace aside while in a room; it is restored, untouched, on leaving.
   enterRoom() {
     if (rec.active) rec.stop('workspace');
     flushSave();
     stashShown();   // keep the open file's undo history for when you come back
     shownId = null;
+    collabFileMap.clear();
     roomStash = { files, activeId, docs: new Map(docs) };
     docs.clear();
     room.active = true;
+    const saveBtn = $('#save-collab-to-local');
+    if (saveBtn) saveBtn.hidden = false;
+    const importBtn = $('#import-from-local');
+    if (importBtn) importBtn.hidden = false;
     return { files: files.map((f) => ({ name: f.name, code: f.code, stdin: f.stdin })) };
   },
   exitRoom() {
     if (rec.active) rec.stop('workspace');
     room.active = false;
+    collabFileMap.clear();
+    closeImportLocalDialog();
+    const saveBtn = $('#save-collab-to-local');
+    if (saveBtn) saveBtn.hidden = true;
+    const importBtn = $('#import-from-local');
+    if (importBtn) importBtn.hidden = true;
     if (!roomStash) return;
     files = roomStash.files;
     docs.clear();

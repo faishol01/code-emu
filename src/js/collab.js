@@ -680,6 +680,31 @@ window.CppWasmCollabInstall = function (app) {
       list,
       nameField(),
       el('p', { class: 'collab-note' }, 'Anyone with the link can join and edit. Files are shared only between the browsers in the room.'),
+      el('button', {
+        type: 'button',
+        class: 'btn wide',
+        id: 'collab-save-local-btn',
+        style: 'margin-bottom: 8px;',
+        onclick: () => {
+          if (app.addCollabFilesToLocal) app.addCollabFilesToLocal();
+          const saveBtn = $('#collab-save-local-btn');
+          if (saveBtn) {
+            const orig = saveBtn.textContent;
+            saveBtn.textContent = 'Saved to local workspace';
+            setTimeout(() => { if (saveBtn) saveBtn.textContent = orig; }, 2000);
+          }
+        },
+      }, 'Save files to local workspace'),
+      el('button', {
+        type: 'button',
+        class: 'btn wide',
+        id: 'collab-import-local-btn',
+        style: 'margin-bottom: 8px;',
+        onclick: () => {
+          closePanel();
+          if (app.openImportLocalDialog) app.openImportLocalDialog();
+        },
+      }, 'Import file from local workspace'),
       el('button', { type: 'button', class: 'btn wide', onclick: () => { closePanel(); app.go('workspace'); } }, 'Leave room'),
     ].filter(Boolean));
   }
