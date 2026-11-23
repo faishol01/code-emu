@@ -1,6 +1,6 @@
 # cpp.wasm
 
-Compile and run C++ in the browser. Clang 8 builds your code to WebAssembly and
+Compile and run C++ in the browser. Clang 22 builds your code to WebAssembly and
 runs it in the page; nothing is sent to a server.
 
 ## Folder layout
@@ -20,12 +20,9 @@ src/
     cpprec.js               the .cpprec recording format (encoder and decoder)
     record.js               recorder, Recordings page and player
     editor.js               the editor: a small wrapper around CodeMirror 6
+    visualizer.js           step-by-step C++ execution trace visualizer
   vendors/
-    wasm-clang/
-      clang                 ┐
-      lld                   │ add these four yourself, from
-      memfs                 │ https://github.com/binji/wasm-clang
-      sysroot.tar           ┘
+    wasm-clang/             license and docs (toolchain loaded on demand via CDN)
     clang-format/           formatter for the Format button (wasm-fmt 23.1.1)
     editor/                 CodeMirror 6 + Yjs, y-codemirror.next, y-protocols, Trystero (one bundle)
     ibm-plex/               IBM Plex Sans and Mono fonts (Fontsource 5.3.0)
@@ -33,10 +30,10 @@ src/
     coi-serviceworker/      license for coi-serviceworker.js
 ```
 
-Everything is self-hosted. The only requests to other sites are the Nostr
-relay connections made while you are in a collaboration room. All paths
-are relative to `index.html`, so the site works at a domain root or in a
-subfolder.
+The C++ toolchain (Clang 22, wasm-ld, libc++) is fetched on demand directly from
+`@live-codes/clang-wasm` via CDN (`https://cdn.jsdelivr.net/npm/@live-codes/clang-wasm@0.3.0/`).
+In collaboration rooms, browsers connect directly via public Nostr relays (Trystero).
+All paths are relative to `index.html`, so the site works at a domain root or in a subfolder.
 
 ## Run locally
 
@@ -50,12 +47,9 @@ GitHub Pages can't send custom headers, so `coi-serviceworker.js` adds them in
 the browser: on the first visit it installs a service worker and reloads the
 page once, and from then on interactive mode works.
 
-1. Add the four toolchain files to `src/vendors/wasm-clang/`. Commit them as
-   normal files, not with Git LFS (Pages doesn't serve LFS files). Each is under
-   GitHub's 100 MB file limit.
-2. Push this folder to a repository and turn on Pages (Settings → Pages →
-   Deploy from a branch, folder `/` or `/docs`).
-3. Open `https://<user>.github.io/<repo>/`. The page reloads once by itself.
+1. Push this folder to a GitHub repository and turn on Pages (Settings → Pages →
+   Deploy from a branch, root `/`).
+2. Open `https://<user>.github.io/<repo>/`. The page reloads once by itself.
 
 Keep `coi-serviceworker.js` next to `index.html`: a service worker only
 controls pages at or below its own folder. Interactive mode still needs a
@@ -230,9 +224,20 @@ saved in the browser's localStorage, so they stay on this device and browser.
 Batch input (the default) sends the Input pane to the program at the start.
 Interactive lets you type while the program runs; it needs the headers below.
 
+## Execution Visualizer
+
+Click **Visualize** in the editor header to step through program execution interactively (Python Tutor style for C++):
+
+- **Pre-compilation syntax check**: Verifies original code compiles without errors before instrumenting and launching the visualizer.
+- **Fine-grained execution highlighting**: Steps through statements and loop components individually (Initialization → Condition → Body → Update).
+- **Variables panel**: Tracks global variables, local variables, and function parameters (with reference passing support). Out-of-scope variables are cleanly grouped and removed.
+- **Call stack**: Visualizes active call frames and return values.
+- **Separated output**: Separate toggles for "Program Output" and "Compiler Output".
+- Configurable step limits (up to 10,000 steps).
+
 ## Compiler options
 
-Fixed: `-std=c++14 -O2 -Wall`. Programs are stopped after 10 seconds of run
+Default: `-std=c++17 -O2 -Wall` (powered by Clang 22 with libc++). Programs are stopped after 10 seconds of run
 time (`TIME_LIMIT_MS` in `src/js/app.js`); in interactive mode, time spent
 waiting for your input doesn't count. `#include <bits/stdc++.h>` is supported.
-No exceptions or threads (Clang 8 / WASI limits).
+Target is `wasm32-wasi`.

@@ -5,8 +5,7 @@
 // worker.js sits next to this script.
 const WORKER_URL = new URL('worker.js?v=1.3', document.currentScript.src).href;
 
-// The toolchain files can be loaded from the @live-codes/clang-wasm package on CDN
-// or from the local copy in src/vendors/wasm-clang/.
+// The toolchain is loaded directly from @live-codes/clang-wasm package on CDN.
 const DEFAULT_BASE = 'https://cdn.jsdelivr.net/npm/@live-codes/clang-wasm@0.3.0/';
 const OLD_DEFAULT_BASES = ['https://binji.github.io/wasm-clang/', '/wasm-clang/', '/src/wasm-clang/', 'src/vendors/wasm-clang/', '/src/vendors/wasm-clang/'];
 // Resolve here so the worker gets a full URL (it would resolve relative paths against src/js/).
@@ -988,7 +987,7 @@ function spawn() {
     setStep('toolchain', 'fail', 'failed');
     status('The compiler could not be loaded', 'error');
     sys(location.protocol === 'file:'
-      ? 'This page was opened from a file, so ' + base + ' has no web server to load from. Serve the page over http(s) with the toolchain in src/vendors/wasm-clang/, or enter a full URL under “Toolchain source”.'
+      ? 'This page was opened from a file. Toolchain loading requires http(s) or a valid CDN connection. Enter a full URL under “Toolchain source”.'
       : 'The toolchain source “' + base + '” isn’t a valid address. Fix it under “Toolchain source”.', 'bad');
     return false;
   }

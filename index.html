@@ -258,7 +258,7 @@
       <div class="credit">
         <div><a class="name" href="https://github.com/live-codes/clang-wasm" target="_blank" rel="noopener">@live-codes/clang-wasm</a> <span class="by">by the LiveCodes project</span></div>
         <span class="license">MIT</span>
-        <p>The prebuilt Clang, wasm-ld, in-memory file system and sysroot this app downloads. Built from LLVM 22 compiled to WebAssembly; cpp.wasm loads it from <code>https://cdn.jsdelivr.net/npm/@live-codes/clang-wasm@0.3.0/</code> or <code>src/vendors/wasm-clang/</code>.</p>
+        <p>The prebuilt Clang, wasm-ld, in-memory file system and sysroot this app downloads. Built from LLVM 22 compiled to WebAssembly; cpp.wasm loads it directly from <code>https://cdn.jsdelivr.net/npm/@live-codes/clang-wasm@0.3.0/</code>.</p>
       </div>
       <div class="credit">
         <div><a class="name" href="https://llvm.org" target="_blank" rel="noopener">Clang and LLD 22.1.8</a> <span class="by">by the LLVM project</span></div>
@@ -319,9 +319,19 @@
 
     <h2>Ideas and fixes</h2>
       <div class="credit">
+        <div><a class="name" href="https://github.com/binji/wasm-clang" target="_blank" rel="noopener">binji/wasm-clang</a> <span class="by">by Ben Smith</span></div>
+        <span class="license">Apache 2.0</span>
+        <p>The original WebAssembly Clang and in-memory filesystem implementation that pioneered compiling C++ in the browser.</p>
+      </div>
+      <div class="credit">
         <div><a class="name" href="https://github.com/EduOJ/wasm-clang" target="_blank" rel="noopener">EduOJ wasm-clang</a> <span class="by">by littlebear0729 and leoleoasd</span></div>
         <span class="license">MIT / Apache 2.0</span>
         <p>Their stdin work, proposed upstream in <a href="https://github.com/binji/wasm-clang/pull/6" target="_blank" rel="noopener">wasm-clang pull request 6</a>, was the starting point for how this app feeds the Input pane to your program.</p>
+      </div>
+      <div class="credit">
+        <div><a class="name" href="https://pythontutor.com/" target="_blank" rel="noopener">Python Tutor</a> <span class="by">by Philip Guo</span></div>
+        <span class="license">GPLv3</span>
+        <p>The inspiration for the step-by-step execution trace visualizer, variables panel, and call stack visualization.</p>
       </div>
 
     <p class="note">Code adapted from wasm-clang keeps its Apache 2.0 notice in <code>src/js/worker.js</code>. Each project above is distributed under its own license; follow the links for the full terms.</p>
@@ -336,7 +346,7 @@
   <details id="settings">
     <summary>Toolchain source</summary>
     <div class="popover">
-      <p>Clang 22, wasm-ld, the in-memory file system and the libc++ sysroot are fetched from this folder or URL: by default <code>https://cdn.jsdelivr.net/npm/@live-codes/clang-wasm@0.3.0/</code> (or local <code>src/vendors/wasm-clang/</code>). It provides <code>clang</code>, <code>lld</code>, <code>memfs</code> and <code>sysroot.tar</code>.</p>
+      <p>Clang 22, wasm-ld, the in-memory file system and the libc++ sysroot are fetched from this URL: by default <code>https://cdn.jsdelivr.net/npm/@live-codes/clang-wasm@0.3.0/</code>.</p>
       <div class="row">
         <input id="base-url" type="text" spellcheck="false" autocomplete="off" aria-label="Toolchain folder or URL">
         <button type="button" id="base-default">Default</button>
