@@ -160,7 +160,7 @@ var CppVisualizer = (function () {
   overflow: auto;
   padding: 10px 14px;
 }
-.viz-vars-content { flex: 1; overflow: auto; }
+.viz-vars-content { flex: 1; overflow: auto; position: relative; }
 .viz-vars-frame-title {
   font-size: 11px;
   font-weight: 600;
@@ -184,10 +184,40 @@ var CppVisualizer = (function () {
 .viz-vars-table td:first-child { font-weight: 600; color: var(--ink); }
 .viz-vars-table td:nth-child(2) { color: var(--t-type); font-size: 11.5px; }
 .viz-vars-table td:nth-child(3) { color: var(--t-num); word-break: break-all; white-space: normal; }
+.viz-vars-table tr { transition: background-color .15s ease; border-radius: 4px; }
 .viz-vars-empty {
   font-size: 12px;
   color: var(--muted);
   font-style: italic;
+}
+.viz-ref-arrows-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 2;
+  overflow: visible;
+}
+.viz-ref-anchor-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--accent);
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.viz-ref-target-hook {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.viz-ref-arrow-path {
+  pointer-events: stroke;
+  cursor: pointer;
+  transition: stroke-width .15s, filter .15s;
 }
 
 /* ── changed highlight ────────────────────────────────────────────── */
@@ -963,6 +993,167 @@ var CppVisualizer = (function () {
       }
     });
 
+    // ── Reference parameter arrows ───
+
+    var arrowsSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    arrowsSvg.setAttribute('class', 'viz-ref-arrows-svg');
+    varsContent.addEventListener('scroll', function () { drawRefArrows(); }, { passive: true });
+    window.addEventListener('resize', function () { drawRefArrows(); }, { passive: true });
+
+    function drawRefArrows() {
+      if (!arrowsSvg || !varsContent || !panel.isConnected) return;
+      arrowsSvg.innerHTML = '';
+
+      var refRows = varsContent.querySelectorAll('tr[data-ref-var]');
+      if (!refRows.length) return;
+
+      var cRect = varsContent.getBoundingClientRect();
+      var sTop = varsContent.scrollTop;
+      var sLeft = varsContent.scrollLeft;
+
+      var scrollW = Math.max(varsContent.scrollWidth, varsContent.clientWidth);
+      var scrollH = Math.max(varsContent.scrollHeight, varsContent.clientHeight);
+      arrowsSvg.style.width = scrollW + 'px';
+      arrowsSvg.style.height = scrollH + 'px';
+      arrowsSvg.setAttribute('viewBox', '0 0 ' + scrollW + ' ' + scrollH);
+
+      var defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+      arrowsSvg.appendChild(defs);
+
+      var colors = ['#1c7ed6', '#e8590c', '#2f9e44', '#ae3ec9', '#d6336c', '#0c8599'];
+
+      refRows.forEach(function (srcTr, idx) {
+        var refVarName = srcTr.dataset.refVar;
+        var refFrame = srcTr.dataset.refFrame;
+
+        var targetTr = null;
+        if (refFrame === '-1') {
+          targetTr = varsContent.querySelector('tr[data-frame="-1"][data-var="' + refVarName + '"]');
+        } else {
+          targetTr = varsContent.querySelector('tr[data-frame="' + refFrame + '"][data-var="' + refVarName + '"]');
+        }
+        if (!targetTr) {
+          var candidates = varsContent.querySelectorAll('tr[data-var="' + refVarName + '"]');
+          for (var ci = 0; ci < candidates.length; ci++) {
+            if (candidates[ci] !== srcTr) {
+              targetTr = candidates[ci];
+              break;
+            }
+          }
+        }
+
+        if (!targetTr) {
+          var valTd = srcTr.querySelector('td.viz-var-val');
+          if (valTd && !valTd.textContent.includes('\u2192')) {
+            valTd.textContent += ' (\u2192 ' + refVarName + ')';
+          }
+          return;
+        }
+
+        var color = colors[idx % colors.length];
+        var markerId = 'viz-ref-arrow-' + idx;
+        var marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+        marker.setAttribute('id', markerId);
+        marker.setAttribute('viewBox', '0 0 8 8');
+        marker.setAttribute('refX', '7');
+        marker.setAttribute('refY', '4');
+        marker.setAttribute('markerWidth', '7');
+        marker.setAttribute('markerHeight', '7');
+        marker.setAttribute('orient', 'auto');
+
+        var markerPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        markerPath.setAttribute('d', 'M 0 1 L 7 4 L 0 7 z');
+        markerPath.setAttribute('fill', color);
+        marker.appendChild(markerPath);
+        defs.appendChild(marker);
+
+        var srcAnchor = srcTr.querySelector('.viz-ref-anchor-dot') || srcTr.querySelector('td:last-child') || srcTr;
+        var tgtAnchor = targetTr.querySelector('.viz-ref-target-hook') || targetTr.querySelector('td:last-child') || targetTr;
+
+        var sRect = srcAnchor.getBoundingClientRect();
+        var tRect = tgtAnchor.getBoundingClientRect();
+
+        var x1 = sRect.right - cRect.left + sLeft + 3;
+        var y1 = sRect.top - cRect.top + sTop + sRect.height / 2;
+
+        var x2 = tRect.right - cRect.left + sLeft + 3;
+        var y2 = tRect.top - cRect.top + sTop + tRect.height / 2;
+
+        var r = 8;
+        var offset = 22 + (idx * 14);
+        var maxX = Math.max(x1, x2) + offset;
+        var clientW = varsContent.clientWidth;
+        if (clientW && maxX > clientW - 12) {
+          maxX = Math.max(Math.max(x1, x2) + 12, clientW - 12);
+        }
+
+        var d;
+        if (Math.abs(y1 - y2) < 4) {
+          d = 'M ' + x1 + ' ' + y1 + ' L ' + x2 + ' ' + y2;
+        } else if (y1 < y2) {
+          d = 'M ' + x1 + ' ' + y1 +
+              ' L ' + (maxX - r) + ' ' + y1 +
+              ' A ' + r + ' ' + r + ' 0 0 1 ' + maxX + ' ' + (y1 + r) +
+              ' L ' + maxX + ' ' + (y2 - r) +
+              ' A ' + r + ' ' + r + ' 0 0 1 ' + (maxX - r) + ' ' + y2 +
+              ' L ' + (x2 + 2) + ' ' + y2;
+        } else {
+          d = 'M ' + x1 + ' ' + y1 +
+              ' L ' + (maxX - r) + ' ' + y1 +
+              ' A ' + r + ' ' + r + ' 0 0 0 ' + maxX + ' ' + (y1 - r) +
+              ' L ' + maxX + ' ' + (y2 + r) +
+              ' A ' + r + ' ' + r + ' 0 0 0 ' + (maxX - r) + ' ' + y2 +
+              ' L ' + (x2 + 2) + ' ' + y2;
+        }
+
+        var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', d);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', color);
+        path.setAttribute('stroke-width', '2');
+        path.setAttribute('stroke-linecap', 'round');
+        path.setAttribute('stroke-linejoin', 'round');
+        path.setAttribute('marker-end', 'url(#' + markerId + ')');
+        path.setAttribute('class', 'viz-ref-arrow-path');
+
+        var titleEl = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        titleEl.textContent = srcTr.dataset.var + ' \u2192 ' + refVarName;
+        path.appendChild(titleEl);
+
+        var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', x1);
+        circle.setAttribute('cy', y1);
+        circle.setAttribute('r', '3');
+        circle.setAttribute('fill', color);
+
+        arrowsSvg.appendChild(path);
+        arrowsSvg.appendChild(circle);
+
+        var srcDot = srcTr.querySelector('.viz-ref-anchor-dot');
+        if (srcDot) {
+          srcDot.style.backgroundColor = color;
+        }
+
+        function setHighlight(on) {
+          path.setAttribute('stroke-width', on ? '3.5' : '2');
+          if (on) {
+            path.setAttribute('filter', 'drop-shadow(0 0 3px ' + color + ')');
+            srcTr.style.backgroundColor = color + '22';
+            targetTr.style.backgroundColor = color + '22';
+          } else {
+            path.removeAttribute('filter');
+            srcTr.style.backgroundColor = '';
+            targetTr.style.backgroundColor = '';
+          }
+        }
+
+        srcTr.addEventListener('mouseenter', function () { setHighlight(true); });
+        srcTr.addEventListener('mouseleave', function () { setHighlight(false); });
+        targetTr.addEventListener('mouseenter', function () { setHighlight(true); });
+        targetTr.addEventListener('mouseleave', function () { setHighlight(false); });
+      });
+    }
+
     // ── Rendering ─────────────────────
 
     function render(state) {
@@ -1050,6 +1241,7 @@ var CppVisualizer = (function () {
         var emptyVars = el('div', 'viz-vars-empty');
         emptyVars.textContent = 'No variables in scope.';
         varsContent.appendChild(emptyVars);
+        drawRefArrows();
       } else {
         // 1. Global variables section
         if (gKeys.length > 0) {
@@ -1062,6 +1254,8 @@ var CppVisualizer = (function () {
             var gName = gKeys[gi];
             var gv = globals[gName];
             var gTr = document.createElement('tr');
+            gTr.dataset.frame = '-1';
+            gTr.dataset.var = gName;
             if (changedVars.has(gName)) {
               gTr.className = 'viz-changed';
             }
@@ -1070,7 +1264,16 @@ var CppVisualizer = (function () {
             var gTdType = document.createElement('td');
             gTdType.textContent = gv.type;
             var gTdVal = document.createElement('td');
-            gTdVal.textContent = gv.val;
+            gTdVal.className = 'viz-var-val';
+            var gValSpan = document.createElement('span');
+            gValSpan.className = 'viz-val-text';
+            gValSpan.textContent = gv.val;
+            gTdVal.appendChild(gValSpan);
+
+            var gTargetHook = document.createElement('span');
+            gTargetHook.className = 'viz-ref-target-hook';
+            gTdVal.appendChild(gTargetHook);
+
             gTr.appendChild(gTdName);
             gTr.appendChild(gTdType);
             gTr.appendChild(gTdVal);
@@ -1106,6 +1309,12 @@ var CppVisualizer = (function () {
               var vname = keys[vi];
               var v = fr.vars[vname];
               var tr = document.createElement('tr');
+              tr.dataset.frame = String(fi);
+              tr.dataset.var = vname;
+              if (v.refVar) {
+                tr.dataset.refVar = v.refVar;
+                tr.dataset.refFrame = String(v.refFrameIdx !== undefined ? v.refFrameIdx : -1);
+              }
               if (changedVars.has(vname)) {
                 tr.className = 'viz-changed';
               }
@@ -1114,7 +1323,22 @@ var CppVisualizer = (function () {
               var tdType = document.createElement('td');
               tdType.textContent = v.type;
               var tdVal = document.createElement('td');
-              tdVal.textContent = v.refVar ? (v.val + ' (\u2192 ' + v.refVar + ')') : v.val;
+              tdVal.className = 'viz-var-val';
+              var valSpan = document.createElement('span');
+              valSpan.className = 'viz-val-text';
+              valSpan.textContent = v.val;
+              tdVal.appendChild(valSpan);
+
+              if (v.refVar) {
+                var anchorDot = document.createElement('span');
+                anchorDot.className = 'viz-ref-anchor-dot';
+                anchorDot.title = vname + ' \u2192 ' + v.refVar;
+                tdVal.appendChild(anchorDot);
+              }
+              var targetHook = document.createElement('span');
+              targetHook.className = 'viz-ref-target-hook';
+              tdVal.appendChild(targetHook);
+
               tr.appendChild(tdName);
               tr.appendChild(tdType);
               tr.appendChild(tdVal);
@@ -1122,6 +1346,12 @@ var CppVisualizer = (function () {
             }
             varsContent.appendChild(table);
           }
+        }
+
+        varsContent.appendChild(arrowsSvg);
+        drawRefArrows();
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(drawRefArrows);
         }
       }
 
