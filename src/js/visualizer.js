@@ -388,12 +388,16 @@ var CppVisualizer = (function () {
   /**
    * Search caller frames (top to bottom) and globals for a variable with targetAddr.
    */
-  function resolveRefInfo(callStack, globals, targetAddr, ownName) {
+  function resolveRefInfo(callStack, globals, targetAddr, ownName, ownFrameIdx) {
     if (!targetAddr) return null;
     if (callStack) {
       for (var f = callStack.length - 1; f >= 0; f--) {
         for (var vn in callStack[f].vars) {
-          if (callStack[f].vars[vn].addr === targetAddr && vn !== ownName) {
+          if (callStack[f].vars[vn].addr === targetAddr) {
+            // Only skip self-reference within the exact same frame
+            if (ownFrameIdx !== undefined && f === ownFrameIdx && vn === ownName) {
+              continue;
+            }
             return { refVar: vn, refFrameIdx: f };
           }
         }
@@ -401,12 +405,42 @@ var CppVisualizer = (function () {
     }
     if (globals) {
       for (var gn in globals) {
-        if (globals[gn].addr === targetAddr && gn !== ownName) {
+        if (globals[gn].addr === targetAddr) {
+          if (ownFrameIdx === -1 && gn === ownName) {
+            continue;
+          }
           return { refVar: gn, refFrameIdx: -1 };
         }
       }
     }
     return null;
+  }
+
+  function markVarChanged(changedVars, frameIdx, varName, addr) {
+    if (!changedVars) return;
+    changedVars.add(varName);
+    if (frameIdx !== undefined && frameIdx !== null) {
+      changedVars.add(frameIdx + ':' + varName);
+      changedVars.hasFrameKeys = true;
+    }
+    if (addr) {
+      if (!changedVars.addrs) changedVars.addrs = new Set();
+      changedVars.addrs.add(addr);
+    }
+  }
+
+  function isVarChanged(changedVars, frameIdx, varName, vobj) {
+    if (!changedVars) return false;
+    if (vobj && vobj.addr && changedVars.addrs && changedVars.addrs.size > 0) {
+      return changedVars.addrs.has(vobj.addr);
+    }
+    if (frameIdx !== undefined && frameIdx !== null && changedVars.has(frameIdx + ':' + varName)) {
+      return true;
+    }
+    if (!changedVars.hasFrameKeys && changedVars.has(varName)) {
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -420,7 +454,9 @@ var CppVisualizer = (function () {
           var vobj = callStack[f].vars[vn];
           if (vobj.addr && vobj.addr === targetAddr) {
             vobj.val = newVal;
-            if (isLast && changedVars) changedVars.add(vn);
+            if (isLast && changedVars) {
+              markVarChanged(changedVars, f, vn, targetAddr);
+            }
           }
         }
       }
@@ -430,7 +466,9 @@ var CppVisualizer = (function () {
         var gobj = globals[gn];
         if (gobj.addr && gobj.addr === targetAddr) {
           gobj.val = newVal;
-          if (isLast && changedVars) changedVars.add(gn);
+          if (isLast && changedVars) {
+            markVarChanged(changedVars, -1, gn, targetAddr);
+          }
         }
       }
     }
@@ -461,6 +499,8 @@ var CppVisualizer = (function () {
 
     // Track which vars changed on exactly the target step.
     var changedVars = new Set();
+    changedVars.addrs = new Set();
+    changedVars.hasFrameKeys = false;
 
     for (var i = from; i <= step && i < events.length; i++) {
       var ev = events[i];
@@ -475,10 +515,11 @@ var CppVisualizer = (function () {
             depth: ev.depth,
             vars: {}
           };
+          var topF = callStack.length;
           // Add params as vars in this frame, resolving reference bindings by memory address
           for (var p = 0; p < frame.params.length; p++) {
             var prm = frame.params[p];
-            var refInfo = resolveRefInfo(callStack, globals, prm.addr, prm.name);
+            var refInfo = resolveRefInfo(callStack, globals, prm.addr, prm.name, topF);
             frame.vars[prm.name] = {
               type: prm.type,
               val: prm.val,
@@ -486,7 +527,7 @@ var CppVisualizer = (function () {
               refVar: refInfo ? refInfo.refVar : null,
               refFrameIdx: refInfo ? refInfo.refFrameIdx : null
             };
-            if (isLast) changedVars.add(prm.name);
+            if (isLast) markVarChanged(changedVars, topF, prm.name, prm.addr);
           }
           callStack.push(frame);
           currentLine = ev.line;
@@ -502,21 +543,22 @@ var CppVisualizer = (function () {
 
         case 'global_decl':
           globals[ev.name] = { type: ev.type, val: ev.val, addr: ev.addr };
-          if (isLast) changedVars.add(ev.name);
+          if (isLast) markVarChanged(changedVars, -1, ev.name, ev.addr);
           if (ev.line) currentLine = ev.line;
           break;
 
         case 'var_decl':
           if (callStack.length) {
-            var refInfo = resolveRefInfo(callStack, globals, ev.addr, ev.name);
-            callStack[callStack.length - 1].vars[ev.name] = {
+            var curTopF = callStack.length - 1;
+            var refInfo = resolveRefInfo(callStack, globals, ev.addr, ev.name, curTopF);
+            callStack[curTopF].vars[ev.name] = {
               type: ev.type,
               val: ev.val,
               addr: ev.addr,
               refVar: refInfo ? refInfo.refVar : null,
               refFrameIdx: refInfo ? refInfo.refFrameIdx : null
             };
-            if (isLast) changedVars.add(ev.name);
+            if (isLast) markVarChanged(changedVars, curTopF, ev.name, ev.addr);
           }
           if (ev.line) currentLine = ev.line;
           if (callStack.length && ev.line) callStack[callStack.length - 1].line = ev.line;
@@ -540,7 +582,7 @@ var CppVisualizer = (function () {
               callStack[f].vars[ev.name].val = ev.val;
               if (ev.addr) callStack[f].vars[ev.name].addr = ev.addr;
               else targetAddr = callStack[f].vars[ev.name].addr;
-              if (isLast) changedVars.add(ev.name);
+              if (isLast) markVarChanged(changedVars, f, ev.name, targetAddr);
               found = true;
               break;
             }
@@ -549,12 +591,13 @@ var CppVisualizer = (function () {
             globals[ev.name].val = ev.val;
             if (ev.addr) globals[ev.name].addr = ev.addr;
             else targetAddr = globals[ev.name].addr;
-            if (isLast) changedVars.add(ev.name);
+            if (isLast) markVarChanged(changedVars, -1, ev.name, targetAddr);
             found = true;
           }
           if (!found && callStack.length) {
-            callStack[callStack.length - 1].vars[ev.name] = { type: ev.type || 'auto', val: ev.val, addr: ev.addr };
-            if (isLast) changedVars.add(ev.name);
+            var curTopF = callStack.length - 1;
+            callStack[curTopF].vars[ev.name] = { type: ev.type || 'auto', val: ev.val, addr: ev.addr };
+            if (isLast) markVarChanged(changedVars, curTopF, ev.name, ev.addr);
           }
           if (targetAddr) {
             syncAliasedVars(callStack, globals, targetAddr, ev.val, changedVars, isLast);
@@ -571,14 +614,15 @@ var CppVisualizer = (function () {
               callStack[f].vars[ev.name1].val = ev.val1;
               if (ev.addr1) callStack[f].vars[ev.name1].addr = ev.addr1;
               else targetAddr1 = callStack[f].vars[ev.name1].addr;
-              if (isLast) changedVars.add(ev.name1);
+              if (isLast) markVarChanged(changedVars, f, ev.name1, targetAddr1);
               found1 = true;
               break;
             }
           }
           if (!found1 && callStack.length) {
-            callStack[callStack.length - 1].vars[ev.name1] = { type: ev.type1 || 'auto', val: ev.val1, addr: ev.addr1 };
-            if (isLast) changedVars.add(ev.name1);
+            var curTopF = callStack.length - 1;
+            callStack[curTopF].vars[ev.name1] = { type: ev.type1 || 'auto', val: ev.val1, addr: ev.addr1 };
+            if (isLast) markVarChanged(changedVars, curTopF, ev.name1, ev.addr1);
           }
           if (targetAddr1) {
             syncAliasedVars(callStack, globals, targetAddr1, ev.val1, changedVars, isLast);
@@ -591,14 +635,15 @@ var CppVisualizer = (function () {
               callStack[f].vars[ev.name2].val = ev.val2;
               if (ev.addr2) callStack[f].vars[ev.name2].addr = ev.addr2;
               else targetAddr2 = callStack[f].vars[ev.name2].addr;
-              if (isLast) changedVars.add(ev.name2);
+              if (isLast) markVarChanged(changedVars, f, ev.name2, targetAddr2);
               found2 = true;
               break;
             }
           }
           if (!found2 && callStack.length) {
-            callStack[callStack.length - 1].vars[ev.name2] = { type: ev.type2 || 'auto', val: ev.val2, addr: ev.addr2 };
-            if (isLast) changedVars.add(ev.name2);
+            var curTopF = callStack.length - 1;
+            callStack[curTopF].vars[ev.name2] = { type: ev.type2 || 'auto', val: ev.val2, addr: ev.addr2 };
+            if (isLast) markVarChanged(changedVars, curTopF, ev.name2, ev.addr2);
           }
           if (targetAddr2) {
             syncAliasedVars(callStack, globals, targetAddr2, ev.val2, changedVars, isLast);
@@ -617,7 +662,7 @@ var CppVisualizer = (function () {
                 callStack[f].vars[ev.name].val = ev.val;
                 if (ev.addr) callStack[f].vars[ev.name].addr = ev.addr;
                 else targetAddr = callStack[f].vars[ev.name].addr;
-                if (isLast) changedVars.add(ev.name);
+                if (isLast) markVarChanged(changedVars, f, ev.name, targetAddr);
                 found = true;
                 break;
               }
@@ -626,12 +671,13 @@ var CppVisualizer = (function () {
               globals[ev.name].val = ev.val;
               if (ev.addr) globals[ev.name].addr = ev.addr;
               else targetAddr = globals[ev.name].addr;
-              if (isLast) changedVars.add(ev.name);
+              if (isLast) markVarChanged(changedVars, -1, ev.name, targetAddr);
               found = true;
             }
             if (!found && callStack.length) {
-              callStack[callStack.length - 1].vars[ev.name] = { type: ev.type || 'auto', val: ev.val, addr: ev.addr };
-              if (isLast) changedVars.add(ev.name);
+              var curTopF = callStack.length - 1;
+              callStack[curTopF].vars[ev.name] = { type: ev.type || 'auto', val: ev.val, addr: ev.addr };
+              if (isLast) markVarChanged(changedVars, curTopF, ev.name, ev.addr);
             }
             if (targetAddr) {
               syncAliasedVars(callStack, globals, targetAddr, ev.val, changedVars, isLast);
@@ -650,14 +696,15 @@ var CppVisualizer = (function () {
                 callStack[f].vars[ev.name1].val = ev.val1;
                 if (ev.addr1) callStack[f].vars[ev.name1].addr = ev.addr1;
                 else targetAddr1 = callStack[f].vars[ev.name1].addr;
-                if (isLast) changedVars.add(ev.name1);
+                if (isLast) markVarChanged(changedVars, f, ev.name1, targetAddr1);
                 found1 = true;
                 break;
               }
             }
             if (!found1 && callStack.length) {
-              callStack[callStack.length - 1].vars[ev.name1] = { type: ev.type1 || 'auto', val: ev.val1, addr: ev.addr1 };
-              if (isLast) changedVars.add(ev.name1);
+              var curTopF = callStack.length - 1;
+              callStack[curTopF].vars[ev.name1] = { type: ev.type1 || 'auto', val: ev.val1, addr: ev.addr1 };
+              if (isLast) markVarChanged(changedVars, curTopF, ev.name1, ev.addr1);
             }
             if (targetAddr1) {
               syncAliasedVars(callStack, globals, targetAddr1, ev.val1, changedVars, isLast);
@@ -671,14 +718,15 @@ var CppVisualizer = (function () {
                 callStack[f].vars[ev.name2].val = ev.val2;
                 if (ev.addr2) callStack[f].vars[ev.name2].addr = ev.addr2;
                 else targetAddr2 = callStack[f].vars[ev.name2].addr;
-                if (isLast) changedVars.add(ev.name2);
+                if (isLast) markVarChanged(changedVars, f, ev.name2, targetAddr2);
                 found2 = true;
                 break;
               }
             }
             if (!found2 && callStack.length) {
-              callStack[callStack.length - 1].vars[ev.name2] = { type: ev.type2 || 'auto', val: ev.val2, addr: ev.addr2 };
-              if (isLast) changedVars.add(ev.name2);
+              var curTopF = callStack.length - 1;
+              callStack[curTopF].vars[ev.name2] = { type: ev.type2 || 'auto', val: ev.val2, addr: ev.addr2 };
+              if (isLast) markVarChanged(changedVars, curTopF, ev.name2, ev.addr2);
             }
             if (targetAddr2) {
               syncAliasedVars(callStack, globals, targetAddr2, ev.val2, changedVars, isLast);
@@ -702,7 +750,7 @@ var CppVisualizer = (function () {
                 callStack[f].vars[ev.name].val = ev.val;
                 if (ev.addr) callStack[f].vars[ev.name].addr = ev.addr;
                 else targetAddr = callStack[f].vars[ev.name].addr;
-                if (isLast) changedVars.add(ev.name);
+                if (isLast) markVarChanged(changedVars, f, ev.name, targetAddr);
                 found = true;
                 break;
               }
@@ -711,12 +759,13 @@ var CppVisualizer = (function () {
               globals[ev.name].val = ev.val;
               if (ev.addr) globals[ev.name].addr = ev.addr;
               else targetAddr = globals[ev.name].addr;
-              if (isLast) changedVars.add(ev.name);
+              if (isLast) markVarChanged(changedVars, -1, ev.name, targetAddr);
               found = true;
             }
             if (!found && callStack.length) {
-              callStack[callStack.length - 1].vars[ev.name] = { type: ev.type || 'auto', val: ev.val, addr: ev.addr };
-              if (isLast) changedVars.add(ev.name);
+              var curTopF = callStack.length - 1;
+              callStack[curTopF].vars[ev.name] = { type: ev.type || 'auto', val: ev.val, addr: ev.addr };
+              if (isLast) markVarChanged(changedVars, curTopF, ev.name, ev.addr);
             }
             if (targetAddr) {
               syncAliasedVars(callStack, globals, targetAddr, ev.val, changedVars, isLast);
@@ -1020,7 +1069,11 @@ var CppVisualizer = (function () {
       var defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
       arrowsSvg.appendChild(defs);
 
-      var colors = ['#1c7ed6', '#e8590c', '#2f9e44', '#ae3ec9', '#d6336c', '#0c8599'];
+      var colors = ['#1c7ed6', '#e8590c', '#2f9e44', '#ae3ec9', '#d6336c', '#0c8599', '#f59f00', '#20c997'];
+
+      // Dynamically adjust right padding to ensure adequate gutter for all reference arrows
+      var gutter = Math.max(28, 20 + (refRows.length * 14));
+      varsContent.style.paddingRight = gutter + 'px';
 
       refRows.forEach(function (srcTr, idx) {
         var refVarName = srcTr.dataset.refVar;
@@ -1080,11 +1133,12 @@ var CppVisualizer = (function () {
         var y2 = tRect.top - cRect.top + sTop + tRect.height / 2;
 
         var r = 8;
-        var offset = 22 + (idx * 14);
+        var offset = 18 + (idx * 14);
         var maxX = Math.max(x1, x2) + offset;
-        var clientW = varsContent.clientWidth;
-        if (clientW && maxX > clientW - 12) {
-          maxX = Math.max(Math.max(x1, x2) + 12, clientW - 12);
+        if (maxX + 16 > scrollW) {
+          scrollW = maxX + 16;
+          arrowsSvg.style.width = scrollW + 'px';
+          arrowsSvg.setAttribute('viewBox', '0 0 ' + scrollW + ' ' + scrollH);
         }
 
         var d;
@@ -1256,7 +1310,7 @@ var CppVisualizer = (function () {
             var gTr = document.createElement('tr');
             gTr.dataset.frame = '-1';
             gTr.dataset.var = gName;
-            if (changedVars.has(gName)) {
+            if (isVarChanged(changedVars, -1, gName, gv)) {
               gTr.className = 'viz-changed';
             }
             var gTdName = document.createElement('td');
@@ -1315,7 +1369,7 @@ var CppVisualizer = (function () {
                 tr.dataset.refVar = v.refVar;
                 tr.dataset.refFrame = String(v.refFrameIdx !== undefined ? v.refFrameIdx : -1);
               }
-              if (changedVars.has(vname)) {
+              if (isVarChanged(changedVars, fi, vname, v)) {
                 tr.className = 'viz-changed';
               }
               var tdName = document.createElement('td');
@@ -1480,9 +1534,10 @@ var CppVisualizer = (function () {
         switch (ev.e) {
           case 'func_enter':
             var frame = { name: ev.name, params: ev.params || [], line: ev.line, depth: ev.depth, vars: {} };
+            var topF = cs.length;
             for (var p = 0; p < frame.params.length; p++) {
               var prm = frame.params[p];
-              var refInfo = resolveRefInfo(cs, globals, prm.addr, prm.name);
+              var refInfo = resolveRefInfo(cs, globals, prm.addr, prm.name, topF);
               frame.vars[prm.name] = {
                 type: prm.type,
                 val: prm.val,
@@ -1506,7 +1561,8 @@ var CppVisualizer = (function () {
             break;
           case 'var_decl':
             if (cs.length) {
-              var refInfo = resolveRefInfo(cs, globals, ev.addr, ev.name);
+              var curTopF = cs.length - 1;
+              var refInfo = resolveRefInfo(cs, globals, ev.addr, ev.name, curTopF);
               cs[cs.length - 1].vars[ev.name] = {
                 type: ev.type,
                 val: ev.val,
@@ -3035,7 +3091,8 @@ var CppVisualizer = (function () {
   var exp = {
     parseTrace: parseTrace,
     instrumentCode: instrumentCode,
-    create: create
+    create: create,
+    computeState: computeState
   };
 
   if (typeof window !== 'undefined') {
