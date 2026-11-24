@@ -192,6 +192,8 @@
     <div class="recs-actions">
       <button type="button" class="btn" id="rec-open">Open a .cpprec file</button>
       <span class="recs-hint">or drop one on this page</span>
+      <hr/>
+      <button type="button" class="btn btn-ai" id="rec-download-skill" title="AI skill to analyze coding progression">📦 Download AI Skill (.zip)</button>
     </div>
     <p class="home-msg" id="recs-msg" aria-live="polite"></p>
     <ul class="rec-list" id="rec-list"></ul>
@@ -208,6 +210,7 @@
       <span class="player-meta" id="player-meta"></span>
     </div>
     <div class="player-top-actions">
+      <button type="button" class="btn btn-ai" id="player-ai-analyze" title="Analyze learner progress and C++ knowledge with AI">✨ AI Analysis</button>
       <button type="button" class="btn" id="player-zip" title="Download the files as they are at this point, as a zip">Files at this point</button>
       <button type="button" class="btn" id="player-download">Download recording</button>
     </div>
@@ -377,6 +380,19 @@
   </div>
 </dialog>
 
+<dialog id="ai-analysis-dialog" class="modal-dialog ai-analysis-dialog" aria-labelledby="ai-analysis-title">
+  <div class="modal-head">
+    <h3 id="ai-analysis-title">✨ AI Progress & Knowledge Analysis</h3>
+    <button type="button" class="icon-btn modal-close" id="ai-analysis-close" title="Close"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 2.5l9 9M11.5 2.5l-9 9"/></svg></button>
+  </div>
+  <div class="modal-body" id="ai-analysis-body"></div>
+  <div class="modal-foot">
+    <button type="button" class="btn" id="ai-analysis-copy-prompt">📋 Copy AI Prompt</button>
+    <button type="button" class="btn primary" id="ai-analysis-run-btn">✨ Generate Analysis</button>
+    <button type="button" class="btn" id="ai-analysis-done">Close</button>
+  </div>
+</dialog>
+
 <script src="src/vendors/editor/editor.bundle.js"></script>
 <script src="src/js/editor.js?v=1.1"></script>
 
@@ -384,6 +400,7 @@
 <script src="src/js/collab.js"></script>
 <script src="src/js/cpprec.js"></script>
 <script src="src/js/record.js"></script>
+<script src="src/js/learner-analysis.js"></script>
 <script src="src/js/visualizer.js?v=1.2"></script>
 <script src="src/js/app.js?v=1.2"></script>
 </body>

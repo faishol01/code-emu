@@ -298,6 +298,7 @@ window.CppWasmRecordInstall = function (app) {
       }
       acts.append(
         mk('Play', 'primary', () => app.go('play-' + it.id)),
+        mk('✨ AI Analysis', 'btn-ai', () => window.CppLearnerAnalysis && window.CppLearnerAnalysis.open(it)),
         mk('Download', '', () => download(it)),
         mk('Delete', 'danger', async () => {
           if (!confirm('Delete this recording? This can’t be undone.')) return;
@@ -345,6 +346,14 @@ window.CppWasmRecordInstall = function (app) {
     }
   }
   $('#rec-open').addEventListener('click', () => { recInput.value = ''; recInput.click(); });
+  const downloadSkillBtn = $('#rec-download-skill');
+  if (downloadSkillBtn) {
+    downloadSkillBtn.addEventListener('click', () => {
+      if (window.CppLearnerAnalysis && window.CppLearnerAnalysis.downloadSkillZip) {
+        window.CppLearnerAnalysis.downloadSkillZip();
+      }
+    });
+  }
   recInput.addEventListener('change', () => { if (recInput.files[0]) openFile(recInput.files[0]); });
   const recsSection = $('#recordings');
   recsSection.addEventListener('dragover', (e) => { if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault(); });
@@ -623,6 +632,14 @@ window.CppWasmRecordInstall = function (app) {
     renderTime();
   });
   $('#player-follow').addEventListener('change', () => { if (!$('#player-follow').checked) P.pinned = P.shown; render(true); });
+  const aiBtn = $('#player-ai-analyze');
+  if (aiBtn) {
+    aiBtn.addEventListener('click', () => {
+      if (window.CppLearnerAnalysis && P.item) {
+        window.CppLearnerAnalysis.open(P.item, P.events);
+      }
+    });
+  }
   $('#player-download').addEventListener('click', () => { if (P.item) download(P.item); });
   $('#player-zip').addEventListener('click', () => {
     if (!P.state || !window.fflate) return;
