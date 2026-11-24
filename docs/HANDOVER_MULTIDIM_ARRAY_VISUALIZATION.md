@@ -106,6 +106,20 @@ if (arrMatch) { ... }
 ```
 When parsed, array parameter names are registered in `knownArrays` to ensure subsequent element assignments (`grid[i][j] = ...`) emit `__viz::arr_set`.
 
+#### Multi-Dimensional Assignments & Modifications
+To capture assignments (`grid[i][j] = val`), increments (`grid[i][j]++`), method calls, and swaps on multi-dimensional arrays, the parser regexes support repeated bracket pairs `(?:\s*\[[^\]]*\])+`:
+```javascript
+// Array assignments: arr[i] = val, grid[i][j] = val, etc.
+const arrAssignRe = /(?:^|[;{}(,\s])([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])+\s*(?:=(?!=)|\+=|-=|\*=|\/=|%=|<<=|>>=|&=|\^=|\|=)/g;
+
+// Array inc/dec: arr[i]++, grid[i][j]++, etc.
+const arrIncDecRe = /(?:^|[;{}(,\s])([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])+\s*(\+\+|--)|(?:^|[;{}(,\s])(\+\+|--)\s*([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])+/g;
+
+// Container swap: swap(a, b), swap(grid[i][j], grid[k][l])
+const swapRe = /(?:^|[;{}(,\s])(?:std::)?swap\s*\(\s*([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])*\s*,\s*([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])*\s*\)/g;
+```
+Declared array types are stored in `knownArrayTypes = new Map()`, allowing `__viz::arr_set` and `__viz::arr_io_input_event` to pass the exact type string (e.g. `"int[][]"`) so runtime serializers know the exact matrix dimensions.
+
 ---
 
 ### 3.2. C++ Runtime Header (`<visualizer-internal>`)
@@ -128,31 +142,41 @@ inline std::string to_s(const T (&arr)[N]) {
 ```
 *Forward declarations for `to_s(const T&)` and `to_s(const T (&)[N])` are placed at the top of the internal namespace to ensure proper two-phase template lookup.*
 
-#### Address Resolution (`get_arr_addr` / `get_addr`)
+#### Address Resolution (`get_addr`)
 To prevent `reinterpret_cast from array type to uintptr_t` errors, array references take the address via `std::addressof(arr)` before casting:
 ```cpp
 template<typename T, size_t N>
-inline uintptr_t get_arr_addr(const T (&arr)[N]) {
+inline uintptr_t get_addr(const T (&arr)[N]) {
   return reinterpret_cast<uintptr_t>(std::addressof(arr));
 }
 ```
 
-#### Dual-Dispatch Strategy: Fixed-Size Arrays vs. VLAs
-To resolve the C++ standard constraint that variably modified types cannot be template arguments:
+#### Multi-Tier Dispatch: Fixed Arrays vs. VLAs vs. Decayed Pointers
+To avoid template ambiguity and adhere to C++ standard constraints:
 
-1. **Compile-Time Fixed Arrays** match universal forwarding references:
+1. **Fixed-Size Compile-Time Arrays** match exact reference templates:
    ```cpp
-   template<typename T, typename S>
-   inline void arr_decl(const char* name, const char* type, T&& arr, S size, int ln) {
+   template<typename T, size_t N>
+   inline void arr_decl(const char* name, const char* type, const T (&arr)[N], size_t, int ln) {
      std::ostringstream ss;
      ss << "{\"e\":\"var_decl\",\"name\":\"" << name << "\",\"type\":\"" << type
-        << "\",\"val\":\"" << escape_json(serialize_arr(arr, size))
-        << "\",\"addr\":\"" << get_arr_addr(arr)
+        << "\",\"val\":\"" << escape_json(to_s(arr))
+        << "\",\"addr\":\"" << get_addr(arr)
+        << "\",\"line\":" << ln << "}";
+     emit(ss.str());
+   }
+
+   template<typename T, size_t N>
+   inline void arr_set(const char* name, const char* type, const T (&arr)[N], size_t, int ln) {
+     std::ostringstream ss;
+     ss << "{\"e\":\"var_set\",\"name\":\"" << name
+        << "\",\"val\":\"" << escape_json(to_s(arr))
+        << "\",\"addr\":\"" << get_addr(arr)
         << "\",\"line\":" << ln << "}";
      emit(ss.str());
    }
    ```
-2. **Variable Length Arrays (VLAs)** trigger substitution failure on `T&& arr` (SFINAE) and automatically fall back to the concrete non-template `const void*` overload:
+2. **Variable Length Arrays (VLAs)** trigger substitution failure on array reference templates (SFINAE) and automatically fall back to the concrete non-template `const void*` overload:
    ```cpp
    inline void arr_decl(const char* name, const char* type, const void* ptr, size_t size, int ln) {
      std::ostringstream ss;
@@ -162,6 +186,20 @@ To resolve the C++ standard constraint that variably modified types cannot be te
         << "\",\"line\":" << ln << "}";
      emit(ss.str());
    }
+
+   inline void arr_set(const char* name, const char* type, const void* ptr, size_t size, int ln) {
+     std::ostringstream ss;
+     ss << "{\"e\":\"var_set\",\"name\":\"" << name
+        << "\",\"val\":\"" << escape_json(serialize_vla(ptr, type, size))
+        << "\",\"addr\":\"" << reinterpret_cast<uintptr_t>(ptr)
+        << "\",\"line\":" << ln << "}";
+     emit(ss.str());
+   }
+   ```
+3. **Decayed Array Pointers** match explicit pointer overloads:
+   ```cpp
+   template<typename T>
+   inline void arr_decl(const char* name, const char* type, const T* ptr, size_t size, int ln);
    ```
 3. **VLA Memory Deserializer (`serialize_vla`)**:
    Traverses contiguous row-major memory for 1D and 2D VLAs using the element type (`int`, `long long`, `double`, `float`, `char`, `bool`):
@@ -171,23 +209,55 @@ To resolve the C++ standard constraint that variably modified types cannot be te
 
 ---
 
-### 3.3. UI Presentation & Formatting
+### 3.3. Tabular UI Presentation, Index Explorer & Granular Highlights
 
-#### Matrix Formatting (`formatVarValue`)
-Converts serialized 2D JSON arrays (`[[1, 2], [3, 4]]`) into multi-line matrix representations:
-```javascript
-function formatVarValue(val) {
-  if (typeof val !== 'string') return String(val || '');
-  if (val.startsWith('[[') && val.endsWith(']]')) {
-    return val.replace(/\], ?\[/g, '],\n [');
-  }
-  return val;
-}
-```
+#### 1. Tabular View for 1D and 2D Arrays/Vectors
+For arrays and vectors (`<= 2` dimensions), `renderVarValue` dynamically creates structured tables with visible index headers:
+- **1D Arrays/Vectors**:
+  - Top header row with column indices: `[0]`, `[1]`, `[2]`, ...
+  - Bottom data row with cell values.
+- **2D Arrays/Vectors (Matrices)**:
+  - Top header row with column indices `[0]`, `[1]`, `[2]`, ...
+  - Left header column with row indices `[0]`, `[1]`, ...
+  - Matrix data cells corresponding to `grid[r][c]`.
+- **3D Arrays (Tensors)**:
+  - Slice selector tab bar (`Slice [0]`, `Slice [1]`, ...) rendering the active slice as a 2D matrix table.
 
-#### CSS Styling (`src/css/style.css`)
-In `.viz-vars-table td:nth-child(3)`:
-- Set `white-space: pre-wrap;` to allow multi-line matrix rows to wrap cleanly inside table cells while preserving line breaks and indentation.
+#### 2. Interactive Index Explorer
+Each array/vector variable includes an interactive explorer toolbar:
+- **Interactive Index Inputs Row (`.viz-array-inputs-row`)**: Features `idx:` input fields (`[ i ]` for 1D, `[ r ] [ c ]` for 2D, or `[ d1 ] [ d2 ] [ d3 ]` for 3D) alongside a `Raw` view toggle button.
+- **Dedicated Inspect Row Underneath (`.viz-inspect-row`)**: Displays `.viz-inspect-badge` directly under the index fields (e.g. `grid[0][1] = 99`), auto-hiding via `:empty` when no element is inspected.
+- **Hover Inspection & Mouseleave Reset**:
+  - Hovering over any cell in the table immediately synchronizes the input coordinates, highlights the cell (`.viz-cell-inspected`), and reveals the inspect badge.
+  - When the mouse leaves the cell or table (`mouseleave`), the inspection state resets: cell highlight is removed, the inspect badge is cleared, and the input fields are cleared (unless the user has focused them to type).
+- **Raw View Toggle**: Allows switching between the interactive tabular layout and formatted JSON text view.
+
+#### 3. Granular Element-Level Change Highlights
+When an array element is modified (via assignment, increment/decrement, or input reading):
+- `computeState` runs `computeArrayDiff(prevVal, currVal)` and registers the changed coordinate keys (e.g. `"0,1"` or `"2"`) in `changedVars.elementDiffs`.
+- When rendering:
+  - The variable's container row (`tr`) **does NOT** glow with `viz-changed`.
+  - **Only the specific updated cell(s)** in the tabular grid is highlighted with `.viz-cell-changed` and a dedicated `@keyframes viz-cell-flash` animation.
+  - The updated cell is automatically focused in the Index Explorer.
+
+#### 4. Call Stack & Variables Resizing
+- A draggable vertical splitter (`.viz-split-resizer`) is positioned between `.viz-stack` and `.viz-vars` in `.viz-body`.
+- Supports pointer capture dragging with min/max safety limits (minimum 90px stack, minimum 130px variables).
+- Synchronously re-renders SVG reference parameter arrows (`drawRefArrows()`) during and after drag.
+- Double-click resets to default width (220px); left/right arrow keys allow keyboard resizing.
+- Persisted to `localStorage['cppwasm.vizStackWidth']`.
+
+#### 5. Rightmost Pass-by-Reference Arrow Routing
+- To ensure vertical reference arrow trunks never cross over intermediate variables (especially wide tabular/multi-dimensional array variables):
+  - `drawRefArrows()` scans all rows and content elements (`tr`, `.viz-vars-table`, `.viz-array-view`) to determine `maxContentX` (the absolute maximum right edge of all variable content).
+  - Establishes `baselineRight = Math.max(maxContentX + 10, visibleRightX + 6)`.
+  - Positions each vertical arrow trunk strictly in the rightmost gutter (`maxX = baselineRight + offset`), cleanly clearing all intermediate tables before turning horizontally into the target variable hook.
+
+#### 6. Array Elements Passed as Reference Parameters
+- When an element of an array is passed by reference (e.g., `modify(arr[0])`, `modify(arr[2])`, `modify(grid[1][0])`):
+  - In C++, the address of element 0 (`&arr[0]`) equals the array's base address (`&arr`). Previously, aliased synchronization (`syncAliasedVars`) blindly replaced the entire array variable's value with the parameter's scalar value (e.g. `arr.val = 99`).
+  - Added `getArrayElementByAddr(vobj, targetAddr)` and `updateArrayElementByAddr(vobj, targetAddr, newVal)`. When a scalar is written to an aliased address matching or falling inside an array's memory range, the visualizer calculates the linear index (`(targetAddr - baseAddr) / elemSize`), locates the exact 1D or multi-dimensional element (`arr[i]` or `grid[r][c]`), and updates only that element in the array's JSON representation.
+  - `resolveRefInfo` records both `refVar` (e.g., `'arr[2]'`) and `refBaseVar` (`'arr'`), properly routing visualizer arrows to the parent array row while displaying the exact indexed element.
 
 ---
 
@@ -195,6 +265,7 @@ In `.viz-vars-table td:nth-child(3)`:
 
 | Issue | C++ Rule / Root Cause | Resolution |
 | :--- | :--- | :--- |
+| Array variable overwritten with scalar when element passed by reference | `&arr[0]` has the same memory address as `&arr`, causing `syncAliasedVars` to replace `arr.val` with the scalar value. | Implemented `updateArrayElementByAddr` to update only the specific element index within the array data without collapsing the array structure. |
 | `no matching function for call to 'arr_decl'` on 2D arrays | Multi-level qualification conversion: `int (*)[3]` does not implicitly convert to `const int (*)[3]`. | Used forwarding references (`T&& arr`) and array references (`const T (&arr)[N]`). |
 | `reinterpret_cast from 'int[2][3]' to 'uintptr_t' is not allowed` | In C++, `reinterpret_cast` does not perform array-to-pointer decay on array lvalues. | Replaced `reinterpret_cast<uintptr_t>(arr)` with `reinterpret_cast<uintptr_t>(std::addressof(arr))`. |
 | `variably modified type cannot be used as a template argument` | Clang C++ VLA extension: runtime dimensions cannot be deduced as template parameters (`[temp.arg.type]`). | Provided non-template `const void* ptr` overloads that accept decayed VLA pointers via SFINAE fallback. |

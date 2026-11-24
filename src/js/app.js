@@ -1872,6 +1872,146 @@ else { const b = $('#collab-btn'); b.disabled = true; b.title = 'Collaboration n
 if (cm && window.CppWasmRecordInstall) window.CppWasmRecordInstall(collabApi);
 else { const b = $('#rec-btn'); b.disabled = true; b.title = 'Recording needs the code editor to load'; }
 
+function initPanelResizers() {
+  const mainEl = $('main');
+  const resizerFiles = $('#resizer-files');
+  const resizerSide = $('#resizer-side');
+  if (!mainEl || !resizerFiles || !resizerSide) return;
+
+  const DEFAULT_FILES_WIDTH = 200;
+  const DEFAULT_SIDE_WIDTH = 380;
+  const MIN_FILES_WIDTH = 130;
+  const MIN_SIDE_WIDTH = 240;
+  const MIN_EDITOR_WIDTH = 260;
+
+  let filesWidth = DEFAULT_FILES_WIDTH;
+  let sideWidth = DEFAULT_SIDE_WIDTH;
+
+  const saved = store.get('cppwasm.panelWidths', null);
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      if (typeof parsed.filesWidth === 'number' && parsed.filesWidth >= MIN_FILES_WIDTH) {
+        filesWidth = parsed.filesWidth;
+      }
+      if (typeof parsed.sideWidth === 'number' && parsed.sideWidth >= MIN_SIDE_WIDTH) {
+        sideWidth = parsed.sideWidth;
+      }
+    } catch (e) {}
+  }
+
+  function applyWidths() {
+    mainEl.style.setProperty('--files-width', filesWidth + 'px');
+    mainEl.style.setProperty('--side-width', sideWidth + 'px');
+    if (typeof cm !== 'undefined' && cm) cm.refresh();
+  }
+
+  function saveWidths() {
+    store.set('cppwasm.panelWidths', JSON.stringify({ filesWidth, sideWidth }));
+  }
+
+  applyWidths();
+
+  function setupDrag(handle, onDrag, onReset) {
+    let isDragging = false;
+
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      isDragging = true;
+      try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+      handle.classList.add('dragging');
+      document.body.classList.add('resizing-panels');
+      e.preventDefault();
+    });
+
+    handle.addEventListener('pointermove', (e) => {
+      if (!isDragging) return;
+      onDrag(e.clientX);
+    });
+
+    const stopDrag = (e) => {
+      if (!isDragging) return;
+      isDragging = false;
+      try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
+      handle.classList.remove('dragging');
+      document.body.classList.remove('resizing-panels');
+      saveWidths();
+      if (typeof cm !== 'undefined' && cm) cm.refresh();
+      window.dispatchEvent(new Event('resize'));
+    };
+
+    handle.addEventListener('pointerup', stopDrag);
+    handle.addEventListener('pointercancel', stopDrag);
+
+    handle.addEventListener('dblclick', () => {
+      onReset();
+      applyWidths();
+      saveWidths();
+      window.dispatchEvent(new Event('resize'));
+    });
+
+    handle.addEventListener('keydown', (e) => {
+      const delta = e.shiftKey ? 32 : 12;
+      if (handle === resizerFiles) {
+        if (e.key === 'ArrowLeft') {
+          filesWidth = Math.max(MIN_FILES_WIDTH, filesWidth - delta);
+          applyWidths(); saveWidths(); e.preventDefault();
+        } else if (e.key === 'ArrowRight') {
+          filesWidth = Math.min(500, filesWidth + delta);
+          applyWidths(); saveWidths(); e.preventDefault();
+        }
+      } else {
+        if (e.key === 'ArrowLeft') {
+          sideWidth = Math.min(mainEl.getBoundingClientRect().width * 0.65, sideWidth + delta);
+          applyWidths(); saveWidths(); e.preventDefault();
+        } else if (e.key === 'ArrowRight') {
+          sideWidth = Math.max(MIN_SIDE_WIDTH, sideWidth - delta);
+          applyWidths(); saveWidths(); e.preventDefault();
+        }
+      }
+    });
+  }
+
+  setupDrag(resizerFiles, (clientX) => {
+    const mainRect = mainEl.getBoundingClientRect();
+    if (document.body.classList.contains('files-hidden')) return;
+
+    const mainStyle = window.getComputedStyle(mainEl);
+    const padLeft = parseFloat(mainStyle.paddingLeft) || 20;
+    const padRight = parseFloat(mainStyle.paddingRight) || 20;
+    const availableWidth = mainRect.width - padLeft - padRight;
+
+    const newFilesWidth = Math.round(clientX - (mainRect.left + padLeft));
+    const maxFilesWidth = availableWidth - sideWidth - MIN_EDITOR_WIDTH - 24;
+
+    filesWidth = Math.max(MIN_FILES_WIDTH, Math.min(newFilesWidth, Math.max(MIN_FILES_WIDTH, maxFilesWidth)));
+    applyWidths();
+  }, () => {
+    filesWidth = DEFAULT_FILES_WIDTH;
+  });
+
+  setupDrag(resizerSide, (clientX) => {
+    const mainRect = mainEl.getBoundingClientRect();
+    const mainStyle = window.getComputedStyle(mainEl);
+    const padLeft = parseFloat(mainStyle.paddingLeft) || 20;
+    const padRight = parseFloat(mainStyle.paddingRight) || 20;
+    const availableWidth = mainRect.width - padLeft - padRight;
+
+    const isFilesHidden = document.body.classList.contains('files-hidden');
+    const currentFilesW = isFilesHidden ? 0 : filesWidth;
+
+    const newSideWidth = Math.round((mainRect.right - padRight) - clientX);
+    const maxSideWidth = availableWidth - currentFilesW - MIN_EDITOR_WIDTH - (isFilesHidden ? 12 : 24);
+
+    sideWidth = Math.max(MIN_SIDE_WIDTH, Math.min(newSideWidth, Math.max(MIN_SIDE_WIDTH, maxSideWidth)));
+    applyWidths();
+  }, () => {
+    sideWidth = DEFAULT_SIDE_WIDTH;
+  });
+}
+
+initPanelResizers();
+
 window.addEventListener('hashchange', route);
 window.addEventListener('popstate', route);
 route();

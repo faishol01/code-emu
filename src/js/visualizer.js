@@ -107,12 +107,44 @@ var CppVisualizer = (function () {
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
-  width: 50%;
-  max-width: 50%;
-  min-width: 160px;
+  width: var(--viz-stack-width, 220px);
+  min-width: 90px;
+  max-width: calc(100% - 140px);
   overflow: auto;
   padding: 10px 14px;
-  border-right: 1px solid var(--line);
+  border-right: none;
+}
+.viz-split-resizer {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 8px;
+  flex: 0 0 8px;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+  z-index: 5;
+  outline: none;
+  background-color: var(--line);
+  transition: background-color .15s ease;
+}
+.viz-split-resizer:hover,
+.viz-split-resizer:focus-visible,
+.viz-split-resizer.dragging {
+  background-color: var(--accent);
+}
+.viz-split-resizer::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 20px;
+  border-radius: 1px;
+  background-color: var(--panel, #fff);
+  opacity: 0.8;
 }
 .viz-stack-list {
   list-style: none;
@@ -226,6 +258,181 @@ var CppVisualizer = (function () {
   100% { background-color: transparent; }
 }
 .viz-changed td { animation: viz-flash .5s ease-out; }
+
+/* ── Array & Vector Tabular Visualization ─────────────────────────── */
+.viz-array-view {
+  margin: 2px 0 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.viz-array-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.viz-array-explore {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.viz-array-inputs-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.viz-explorer-label {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.viz-idx-input {
+  width: 38px;
+  height: 20px;
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: center;
+  padding: 1px 2px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel, #fff);
+  color: var(--ink);
+  outline: none;
+  box-sizing: border-box;
+}
+.viz-idx-input:focus {
+  border-color: var(--accent);
+}
+.viz-inspect-row {
+  display: flex;
+  align-items: center;
+  min-height: 0;
+}
+.viz-inspect-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 1px 6px;
+  background: rgba(28, 126, 214, 0.08);
+  border-radius: 3px;
+  min-height: 18px;
+  display: inline-flex;
+  align-items: center;
+}
+.viz-inspect-badge:empty {
+  display: none;
+}
+.viz-view-toggle-btn {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  margin-left: auto;
+  transition: all 0.15s ease;
+}
+.viz-view-toggle-btn:hover {
+  color: var(--ink);
+  background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+  border-color: var(--ink);
+}
+.viz-array-table-wrapper {
+  overflow-x: auto;
+  max-width: 100%;
+  padding-bottom: 2px;
+}
+.viz-array-table {
+  border-collapse: separate;
+  border-spacing: 2px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  margin: 0;
+}
+.viz-array-table th, .viz-array-table td {
+  padding: 2px 6px;
+  min-width: 22px;
+  text-align: center;
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+.viz-idx-corner, .viz-idx-th, .viz-row-th {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  user-select: none;
+}
+.viz-val-label {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.03));
+  color: var(--muted);
+  font-size: 10px;
+  font-style: italic;
+  user-select: none;
+}
+.viz-cell-val {
+  background: var(--panel, #fff);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  white-space: nowrap;
+}
+.viz-cell-val:hover {
+  border-color: var(--accent);
+  background: rgba(28, 126, 214, 0.08);
+}
+.viz-cell-inspected {
+  border-color: #1c7ed6 !important;
+  background: rgba(28, 126, 214, 0.18) !important;
+  box-shadow: 0 0 0 1px #1c7ed6;
+  font-weight: 700;
+}
+@keyframes viz-cell-flash {
+  0%   { background-color: #ffec99; border-color: #f59f00; transform: scale(1.08); }
+  50%  { background-color: rgba(245, 159, 0, 0.35); border-color: #f59f00; }
+  100% { background-color: rgba(245, 159, 0, 0.15); border-color: #f59f00; }
+}
+.viz-cell-changed {
+  animation: viz-cell-flash 0.6s ease-out;
+  background-color: rgba(245, 159, 0, 0.18) !important;
+  border-color: #f59f00 !important;
+  font-weight: 700;
+  box-shadow: 0 0 0 1px #f59f00;
+}
+.viz-slice-tabs {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 3px;
+}
+.viz-slice-tab {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.viz-slice-tab.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.viz-array-raw-view {
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--t-num);
+  padding: 4px 6px;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.03));
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  margin: 0;
+}
 
 /* ── output ───────────────────────────────────────────────────────── */
 .viz-output {
@@ -385,6 +592,134 @@ var CppVisualizer = (function () {
 
   // ── State computation ─────────────────────────────────────────────────
 
+  function getElementSizeInBytes(typeStr) {
+    if (!typeStr) return 4;
+    var t = typeStr.replace(/[\[\]*&\s]/g, '').toLowerCase();
+    if (t === 'char' || t === 'bool' || t === 'int8_t' || t === 'uint8_t' || t === 'byte') return 1;
+    if (t === 'short' || t === 'int16_t' || t === 'uint16_t') return 2;
+    if (t === 'int' || t === 'float' || t === 'long' || t === 'int32_t' || t === 'uint32_t' || t === 'size_t') return 4;
+    if (t === 'double' || t === 'longlong' || t === 'int64_t' || t === 'uint64_t') return 8;
+    return 4;
+  }
+
+  function parseScalarValue(valStr) {
+    if (valStr === null || valStr === undefined) return null;
+    valStr = String(valStr).trim();
+    if (valStr === 'true') return true;
+    if (valStr === 'false') return false;
+    if (!isNaN(Number(valStr)) && valStr !== '') return Number(valStr);
+    if (valStr.startsWith('"') && valStr.endsWith('"')) {
+      try { return JSON.parse(valStr); } catch (_) { return valStr.slice(1, -1); }
+    }
+    if (valStr.startsWith("'") && valStr.endsWith("'")) {
+      return valStr.slice(1, -1);
+    }
+    return valStr;
+  }
+
+  function getArrayElementByAddr(vobj, targetAddr) {
+    if (!vobj || !vobj.val || !vobj.addr || !targetAddr) return null;
+    var arrData = parseArrayValue(vobj.val);
+    if (!arrData) return null;
+
+    var dim = getArrayDimension(arrData);
+    var elemSize = getElementSizeInBytes(vobj.type);
+
+    try {
+      var baseAddrBig = BigInt(vobj.addr);
+      var targetAddrBig = BigInt(targetAddr);
+      var byteOffsetBig = targetAddrBig - baseAddrBig;
+      if (byteOffsetBig < 0n) return null;
+
+      var byteOffset = Number(byteOffsetBig);
+      var linearIdx = Math.round(byteOffset / elemSize);
+
+      if (dim === 1) {
+        if (linearIdx >= 0 && linearIdx < arrData.length) {
+          return { bracketStr: '[' + linearIdx + ']' };
+        }
+      } else if (dim === 2) {
+        var colCount = (arrData[0] && Array.isArray(arrData[0])) ? arrData[0].length : 0;
+        if (colCount > 0) {
+          var r = Math.floor(linearIdx / colCount);
+          var c = linearIdx % colCount;
+          if (r >= 0 && r < arrData.length && arrData[r] && c >= 0 && c < arrData[r].length) {
+            return { bracketStr: '[' + r + '][' + c + ']' };
+          }
+        }
+      } else if (dim === 3) {
+        var d2 = (arrData[0] && Array.isArray(arrData[0])) ? arrData[0].length : 0;
+        var d3 = (arrData[0] && arrData[0][0] && Array.isArray(arrData[0][0])) ? arrData[0][0].length : 0;
+        var sliceSize = d2 * d3;
+        if (sliceSize > 0 && d3 > 0) {
+          var d1 = Math.floor(linearIdx / sliceSize);
+          var rem = linearIdx % sliceSize;
+          var row = Math.floor(rem / d3);
+          var col = rem % d3;
+          if (d1 >= 0 && d1 < arrData.length && arrData[d1] && row >= 0 && row < arrData[d1].length && arrData[d1][row] && col >= 0 && col < d3) {
+            return { bracketStr: '[' + d1 + '][' + row + '][' + col + ']' };
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function updateArrayElementByAddr(vobj, targetAddr, newVal) {
+    if (!vobj || !vobj.val || !vobj.addr || !targetAddr) return false;
+    var arrData = parseArrayValue(vobj.val);
+    if (!arrData) return false;
+
+    var dim = getArrayDimension(arrData);
+    var elemSize = getElementSizeInBytes(vobj.type);
+
+    try {
+      var baseAddrBig = BigInt(vobj.addr);
+      var targetAddrBig = BigInt(targetAddr);
+      var byteOffsetBig = targetAddrBig - baseAddrBig;
+      if (byteOffsetBig < 0n) return false;
+
+      var byteOffset = Number(byteOffsetBig);
+      var linearIdx = Math.round(byteOffset / elemSize);
+      var scalar = parseScalarValue(newVal);
+
+      if (dim === 1) {
+        if (linearIdx >= 0 && linearIdx < arrData.length) {
+          arrData[linearIdx] = scalar;
+          vobj.val = JSON.stringify(arrData);
+          return true;
+        }
+      } else if (dim === 2) {
+        var colCount = (arrData[0] && Array.isArray(arrData[0])) ? arrData[0].length : 0;
+        if (colCount > 0) {
+          var r = Math.floor(linearIdx / colCount);
+          var c = linearIdx % colCount;
+          if (r >= 0 && r < arrData.length && arrData[r] && c >= 0 && c < arrData[r].length) {
+            arrData[r][c] = scalar;
+            vobj.val = JSON.stringify(arrData);
+            return true;
+          }
+        }
+      } else if (dim === 3) {
+        var d2 = (arrData[0] && Array.isArray(arrData[0])) ? arrData[0].length : 0;
+        var d3 = (arrData[0] && arrData[0][0] && Array.isArray(arrData[0][0])) ? arrData[0][0].length : 0;
+        var sliceSize = d2 * d3;
+        if (sliceSize > 0 && d3 > 0) {
+          var d1 = Math.floor(linearIdx / sliceSize);
+          var rem = linearIdx % sliceSize;
+          var row = Math.floor(rem / d3);
+          var col = rem % d3;
+          if (d1 >= 0 && d1 < arrData.length && arrData[d1] && row >= 0 && row < arrData[d1].length && arrData[d1][row] && col >= 0 && col < d3) {
+            arrData[d1][row][col] = scalar;
+            vobj.val = JSON.stringify(arrData);
+            return true;
+          }
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
   /**
    * Search caller frames (top to bottom) and globals for a variable with targetAddr.
    */
@@ -393,23 +728,36 @@ var CppVisualizer = (function () {
     if (callStack) {
       for (var f = callStack.length - 1; f >= 0; f--) {
         for (var vn in callStack[f].vars) {
-          if (callStack[f].vars[vn].addr === targetAddr) {
-            // Only skip self-reference within the exact same frame
-            if (ownFrameIdx !== undefined && f === ownFrameIdx && vn === ownName) {
-              continue;
-            }
-            return { refVar: vn, refFrameIdx: f };
+          if (ownFrameIdx !== undefined && f === ownFrameIdx && vn === ownName) {
+            continue;
+          }
+          var vobj = callStack[f].vars[vn];
+          if (!vobj.addr) continue;
+
+          var elemMatch = getArrayElementByAddr(vobj, targetAddr);
+          if (elemMatch) {
+            return { refVar: vn + elemMatch.bracketStr, refBaseVar: vn, refFrameIdx: f };
+          }
+          if (vobj.addr === targetAddr) {
+            return { refVar: vn, refBaseVar: vn, refFrameIdx: f };
           }
         }
       }
     }
     if (globals) {
       for (var gn in globals) {
-        if (globals[gn].addr === targetAddr) {
-          if (ownFrameIdx === -1 && gn === ownName) {
-            continue;
-          }
-          return { refVar: gn, refFrameIdx: -1 };
+        if (ownFrameIdx === -1 && gn === ownName) {
+          continue;
+        }
+        var gobj = globals[gn];
+        if (!gobj.addr) continue;
+
+        var elemMatchG = getArrayElementByAddr(gobj, targetAddr);
+        if (elemMatchG) {
+          return { refVar: gn + elemMatchG.bracketStr, refBaseVar: gn, refFrameIdx: -1 };
+        }
+        if (gobj.addr === targetAddr) {
+          return { refVar: gn, refBaseVar: gn, refFrameIdx: -1 };
         }
       }
     }
@@ -443,19 +791,117 @@ var CppVisualizer = (function () {
     return false;
   }
 
+  function parseArrayValue(val) {
+    if (typeof val !== 'string') return null;
+    val = val.trim();
+    if (!val.startsWith('[') || !val.endsWith(']')) return null;
+    try {
+      var parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (e) {
+      try {
+        var sanitized = val.replace(/'/g, '"').replace(/\.\.\./g, 'null');
+        var p = JSON.parse(sanitized);
+        if (Array.isArray(p)) return p;
+      } catch (e2) {}
+    }
+    return null;
+  }
+
+  function getArrayDimension(arr) {
+    if (!Array.isArray(arr) || arr.length === 0) return 1;
+    if (!Array.isArray(arr[0])) return 1;
+    if (arr[0].length === 0 || !Array.isArray(arr[0][0])) return 2;
+    return 3;
+  }
+
+  function computeArrayDiff(prevValStr, currValStr) {
+    var prev = parseArrayValue(prevValStr);
+    var curr = parseArrayValue(currValStr);
+    if (!curr || !prev) return null;
+    var diff = new Set();
+    var dim = getArrayDimension(curr);
+    if (dim === 1) {
+      var maxLen = Math.max(prev.length, curr.length);
+      for (var i = 0; i < maxLen; i++) {
+        if (prev[i] !== curr[i]) {
+          diff.add(String(i));
+        }
+      }
+    } else if (dim === 2) {
+      var maxR = Math.max(prev.length, curr.length);
+      for (var r = 0; r < maxR; r++) {
+        var prevRow = prev[r] || [];
+        var currRow = curr[r] || [];
+        var maxC = Math.max(prevRow.length, currRow.length);
+        for (var c = 0; c < maxC; c++) {
+          if (prevRow[c] !== currRow[c]) {
+            diff.add(r + ',' + c);
+          }
+        }
+      }
+    } else if (dim === 3) {
+      var maxD1 = Math.max(prev.length, curr.length);
+      for (var d1 = 0; d1 < maxD1; d1++) {
+        var prev2 = prev[d1] || [];
+        var curr2 = curr[d1] || [];
+        var maxD2 = Math.max(prev2.length, curr2.length);
+        for (var d2 = 0; d2 < maxD2; d2++) {
+          var prev3 = prev2[d2] || [];
+          var curr3 = curr2[d2] || [];
+          var maxD3 = Math.max(prev3.length, curr3.length);
+          for (var d3 = 0; d3 < maxD3; d3++) {
+            if (prev3[d3] !== curr3[d3]) {
+              diff.add(d1 + ',' + d2 + ',' + d3);
+            }
+          }
+        }
+      }
+    }
+    return diff;
+  }
+
+  function recordElementDiff(changedVars, key, prevVal, newVal) {
+    if (!changedVars) return;
+    if (!changedVars.elementDiffs) changedVars.elementDiffs = new Map();
+    var diff = computeArrayDiff(prevVal, newVal);
+    if (diff && diff.size > 0) {
+      changedVars.elementDiffs.set(key, diff);
+    }
+  }
+
   /**
    * Synchronize all aliased variables sharing targetAddr across callStack and globals.
    */
   function syncAliasedVars(callStack, globals, targetAddr, newVal, changedVars, isLast) {
     if (!targetAddr) return;
+    var isNewValArray = typeof newVal === 'string' && newVal.trim().startsWith('[');
+
     if (callStack) {
       for (var f = 0; f < callStack.length; f++) {
         for (var vn in callStack[f].vars) {
           var vobj = callStack[f].vars[vn];
-          if (vobj.addr && vobj.addr === targetAddr) {
-            vobj.val = newVal;
+          if (!vobj.addr) continue;
+
+          var isArray = (vobj.type && vobj.type.includes('[]')) || (typeof vobj.val === 'string' && vobj.val.trim().startsWith('['));
+
+          if (vobj.addr === targetAddr) {
+            var prevVal = vobj.val;
+            if (isArray && !isNewValArray) {
+              updateArrayElementByAddr(vobj, targetAddr, newVal);
+            } else {
+              vobj.val = newVal;
+            }
             if (isLast && changedVars) {
               markVarChanged(changedVars, f, vn, targetAddr);
+              recordElementDiff(changedVars, f + ':' + vn, prevVal, vobj.val);
+            }
+          } else if (isArray) {
+            var prevValA = vobj.val;
+            var updated = updateArrayElementByAddr(vobj, targetAddr, newVal);
+            if (updated && isLast && changedVars) {
+              markVarChanged(changedVars, f, vn, vobj.addr);
+              recordElementDiff(changedVars, f + ':' + vn, prevValA, vobj.val);
             }
           }
         }
@@ -464,10 +910,27 @@ var CppVisualizer = (function () {
     if (globals) {
       for (var gn in globals) {
         var gobj = globals[gn];
-        if (gobj.addr && gobj.addr === targetAddr) {
-          gobj.val = newVal;
+        if (!gobj.addr) continue;
+
+        var isArrayG = (gobj.type && gobj.type.includes('[]')) || (typeof gobj.val === 'string' && gobj.val.trim().startsWith('['));
+
+        if (gobj.addr === targetAddr) {
+          var prevValG = gobj.val;
+          if (isArrayG && !isNewValArray) {
+            updateArrayElementByAddr(gobj, targetAddr, newVal);
+          } else {
+            gobj.val = newVal;
+          }
           if (isLast && changedVars) {
             markVarChanged(changedVars, -1, gn, targetAddr);
+            recordElementDiff(changedVars, '-1:' + gn, prevValG, gobj.val);
+          }
+        } else if (isArrayG) {
+          var prevValGA = gobj.val;
+          var updatedG = updateArrayElementByAddr(gobj, targetAddr, newVal);
+          if (updatedG && isLast && changedVars) {
+            markVarChanged(changedVars, -1, gn, gobj.addr);
+            recordElementDiff(changedVars, '-1:' + gn, prevValGA, gobj.val);
           }
         }
       }
@@ -501,6 +964,7 @@ var CppVisualizer = (function () {
     var changedVars = new Set();
     changedVars.addrs = new Set();
     changedVars.hasFrameKeys = false;
+    changedVars.elementDiffs = new Map();
 
     for (var i = from; i <= step && i < events.length; i++) {
       var ev = events[i];
@@ -525,6 +989,7 @@ var CppVisualizer = (function () {
               val: prm.val,
               addr: prm.addr,
               refVar: refInfo ? refInfo.refVar : null,
+              refBaseVar: refInfo ? refInfo.refBaseVar : null,
               refFrameIdx: refInfo ? refInfo.refFrameIdx : null
             };
             if (isLast) markVarChanged(changedVars, topF, prm.name, prm.addr);
@@ -556,6 +1021,7 @@ var CppVisualizer = (function () {
               val: ev.val,
               addr: ev.addr,
               refVar: refInfo ? refInfo.refVar : null,
+              refBaseVar: refInfo ? refInfo.refBaseVar : null,
               refFrameIdx: refInfo ? refInfo.refFrameIdx : null
             };
             if (isLast) markVarChanged(changedVars, curTopF, ev.name, ev.addr);
@@ -579,19 +1045,27 @@ var CppVisualizer = (function () {
           var targetAddr = ev.addr;
           for (var f = callStack.length - 1; f >= 0; f--) {
             if (callStack[f].vars[ev.name] !== undefined) {
+              var prevVal = callStack[f].vars[ev.name].val;
               callStack[f].vars[ev.name].val = ev.val;
               if (ev.addr) callStack[f].vars[ev.name].addr = ev.addr;
               else targetAddr = callStack[f].vars[ev.name].addr;
-              if (isLast) markVarChanged(changedVars, f, ev.name, targetAddr);
+              if (isLast) {
+                markVarChanged(changedVars, f, ev.name, targetAddr);
+                recordElementDiff(changedVars, f + ':' + ev.name, prevVal, ev.val);
+              }
               found = true;
               break;
             }
           }
           if (!found && globals[ev.name] !== undefined) {
+            var prevGVal = globals[ev.name].val;
             globals[ev.name].val = ev.val;
             if (ev.addr) globals[ev.name].addr = ev.addr;
             else targetAddr = globals[ev.name].addr;
-            if (isLast) markVarChanged(changedVars, -1, ev.name, targetAddr);
+            if (isLast) {
+              markVarChanged(changedVars, -1, ev.name, targetAddr);
+              recordElementDiff(changedVars, '-1:' + ev.name, prevGVal, ev.val);
+            }
             found = true;
           }
           if (!found && callStack.length) {
@@ -747,19 +1221,27 @@ var CppVisualizer = (function () {
             var targetAddr = ev.addr;
             for (var f = callStack.length - 1; f >= 0; f--) {
               if (callStack[f].vars[ev.name] !== undefined) {
+                var prevVal = callStack[f].vars[ev.name].val;
                 callStack[f].vars[ev.name].val = ev.val;
                 if (ev.addr) callStack[f].vars[ev.name].addr = ev.addr;
                 else targetAddr = callStack[f].vars[ev.name].addr;
-                if (isLast) markVarChanged(changedVars, f, ev.name, targetAddr);
+                if (isLast) {
+                  markVarChanged(changedVars, f, ev.name, targetAddr);
+                  recordElementDiff(changedVars, f + ':' + ev.name, prevVal, ev.val);
+                }
                 found = true;
                 break;
               }
             }
             if (!found && globals[ev.name] !== undefined) {
+              var prevGVal = globals[ev.name].val;
               globals[ev.name].val = ev.val;
               if (ev.addr) globals[ev.name].addr = ev.addr;
               else targetAddr = globals[ev.name].addr;
-              if (isLast) markVarChanged(changedVars, -1, ev.name, targetAddr);
+              if (isLast) {
+                markVarChanged(changedVars, -1, ev.name, targetAddr);
+                recordElementDiff(changedVars, '-1:' + ev.name, prevGVal, ev.val);
+              }
               found = true;
             }
             if (!found && callStack.length) {
@@ -954,6 +1436,14 @@ var CppVisualizer = (function () {
     stackPane.appendChild(stackH3);
     stackPane.appendChild(stackList);
 
+    // Resizer splitter between Call Stack and Variables
+    var splitResizer = el('div', 'viz-split-resizer', {
+      role: 'separator',
+      'aria-orientation': 'vertical',
+      tabindex: '0',
+      title: 'Drag to resize Call Stack and Variables (double-click to reset)'
+    });
+
     // Variables
     var varsPane = el('div', 'viz-vars');
     var varsH3 = el('h3'); varsH3.textContent = 'Variables';
@@ -962,7 +1452,94 @@ var CppVisualizer = (function () {
     varsPane.appendChild(varsContent);
 
     body.appendChild(stackPane);
+    body.appendChild(splitResizer);
     body.appendChild(varsPane);
+
+    // ── Resizer logic for Call Stack & Variables ──
+    var DEFAULT_STACK_WIDTH = 220;
+    var MIN_STACK_WIDTH = 90;
+    var MIN_VARS_WIDTH = 130;
+
+    var savedStackWidth = null;
+    try {
+      var sVal = localStorage.getItem('cppwasm.vizStackWidth');
+      if (sVal) {
+        var pVal = parseInt(sVal, 10);
+        if (!isNaN(pVal) && pVal >= MIN_STACK_WIDTH) savedStackWidth = pVal;
+      }
+    } catch (_) {}
+
+    var stackWidth = (savedStackWidth !== null) ? savedStackWidth : DEFAULT_STACK_WIDTH;
+
+    function applyStackWidth() {
+      stackPane.style.width = stackWidth + 'px';
+      body.style.setProperty('--viz-stack-width', stackWidth + 'px');
+      drawRefArrows();
+    }
+
+    applyStackWidth();
+
+    (function () {
+      var isDragging = false;
+
+      splitResizer.addEventListener('pointerdown', function (e) {
+        if (e.button !== 0) return;
+        isDragging = true;
+        try { splitResizer.setPointerCapture(e.pointerId); } catch (_) {}
+        splitResizer.classList.add('dragging');
+        document.body.classList.add('resizing-panels');
+        e.preventDefault();
+      });
+
+      splitResizer.addEventListener('pointermove', function (e) {
+        if (!isDragging) return;
+        var bodyRect = body.getBoundingClientRect();
+        var newWidth = Math.round(e.clientX - bodyRect.left);
+        var maxStackW = bodyRect.width - MIN_VARS_WIDTH - 8;
+        stackWidth = Math.max(MIN_STACK_WIDTH, Math.min(newWidth, Math.max(MIN_STACK_WIDTH, maxStackW)));
+        applyStackWidth();
+      });
+
+      var stopDrag = function (e) {
+        if (!isDragging) return;
+        isDragging = false;
+        try { splitResizer.releasePointerCapture(e.pointerId); } catch (_) {}
+        splitResizer.classList.remove('dragging');
+        document.body.classList.remove('resizing-panels');
+        try {
+          localStorage.setItem('cppwasm.vizStackWidth', String(stackWidth));
+        } catch (_) {}
+        drawRefArrows();
+      };
+
+      splitResizer.addEventListener('pointerup', stopDrag);
+      splitResizer.addEventListener('pointercancel', stopDrag);
+
+      splitResizer.addEventListener('dblclick', function () {
+        stackWidth = DEFAULT_STACK_WIDTH;
+        applyStackWidth();
+        try {
+          localStorage.setItem('cppwasm.vizStackWidth', String(stackWidth));
+        } catch (_) {}
+      });
+
+      splitResizer.addEventListener('keydown', function (e) {
+        var delta = (e.shiftKey ? 32 : 12);
+        if (e.key === 'ArrowLeft') {
+          stackWidth = Math.max(MIN_STACK_WIDTH, stackWidth - delta);
+          applyStackWidth();
+          try { localStorage.setItem('cppwasm.vizStackWidth', String(stackWidth)); } catch (_) {}
+          e.preventDefault();
+        } else if (e.key === 'ArrowRight') {
+          var bodyRect = body.getBoundingClientRect();
+          var maxStackW = bodyRect.width - MIN_VARS_WIDTH - 8;
+          stackWidth = Math.min(maxStackW, stackWidth + delta);
+          applyStackWidth();
+          try { localStorage.setItem('cppwasm.vizStackWidth', String(stackWidth)); } catch (_) {}
+          e.preventDefault();
+        }
+      });
+    })();
 
     // IO Section (Input & Output with tabs)
     var ioPane = el('div', 'viz-io');
@@ -1072,21 +1649,35 @@ var CppVisualizer = (function () {
       var colors = ['#1c7ed6', '#e8590c', '#2f9e44', '#ae3ec9', '#d6336c', '#0c8599', '#f59f00', '#20c997'];
 
       // Dynamically adjust right padding to ensure adequate gutter for all reference arrows
-      var gutter = Math.max(28, 20 + (refRows.length * 14));
+      var gutter = Math.max(36, 24 + (refRows.length * 16));
       varsContent.style.paddingRight = gutter + 'px';
+
+      // Find the absolute rightmost edge of all variable content (tables, rows, array grids)
+      var maxContentX = 0;
+      var contentElements = varsContent.querySelectorAll('tr, .viz-vars-table, .viz-array-view');
+      contentElements.forEach(function (el) {
+        var r = el.getBoundingClientRect();
+        if (r.width > 0) {
+          var rx = r.right - cRect.left + sLeft;
+          if (rx > maxContentX) maxContentX = rx;
+        }
+      });
+      var visibleRightX = varsContent.clientWidth + sLeft - gutter;
+      var baselineRight = Math.max(maxContentX + 10, visibleRightX + 6);
 
       refRows.forEach(function (srcTr, idx) {
         var refVarName = srcTr.dataset.refVar;
+        var refBaseVar = srcTr.dataset.refBaseVar || (refVarName ? refVarName.replace(/\[.*$/, '') : '');
         var refFrame = srcTr.dataset.refFrame;
 
         var targetTr = null;
         if (refFrame === '-1') {
-          targetTr = varsContent.querySelector('tr[data-frame="-1"][data-var="' + refVarName + '"]');
+          targetTr = varsContent.querySelector('tr[data-frame="-1"][data-var="' + refBaseVar + '"]');
         } else {
-          targetTr = varsContent.querySelector('tr[data-frame="' + refFrame + '"][data-var="' + refVarName + '"]');
+          targetTr = varsContent.querySelector('tr[data-frame="' + refFrame + '"][data-var="' + refBaseVar + '"]');
         }
         if (!targetTr) {
-          var candidates = varsContent.querySelectorAll('tr[data-var="' + refVarName + '"]');
+          var candidates = varsContent.querySelectorAll('tr[data-var="' + refBaseVar + '"]');
           for (var ci = 0; ci < candidates.length; ci++) {
             if (candidates[ci] !== srcTr) {
               targetTr = candidates[ci];
@@ -1133,17 +1724,18 @@ var CppVisualizer = (function () {
         var y2 = tRect.top - cRect.top + sTop + tRect.height / 2;
 
         var r = 8;
-        var offset = 18 + (idx * 14);
-        var maxX = Math.max(x1, x2) + offset;
-        if (maxX + 16 > scrollW) {
-          scrollW = maxX + 16;
+        var offset = 10 + (idx * 16);
+        // Position vertical trunk strictly in the rightmost gutter beyond all content
+        var maxX = baselineRight + offset;
+        if (maxX + 20 > scrollW) {
+          scrollW = maxX + 20;
           arrowsSvg.style.width = scrollW + 'px';
           arrowsSvg.setAttribute('viewBox', '0 0 ' + scrollW + ' ' + scrollH);
         }
 
         var d;
         if (Math.abs(y1 - y2) < 4) {
-          d = 'M ' + x1 + ' ' + y1 + ' L ' + x2 + ' ' + y2;
+          d = 'M ' + x1 + ' ' + y1 + ' L ' + (x2 + 2) + ' ' + y2;
         } else if (y1 < y2) {
           d = 'M ' + x1 + ' ' + y1 +
               ' L ' + (maxX - r) + ' ' + y1 +
@@ -1216,6 +1808,489 @@ var CppVisualizer = (function () {
         return val.replace(/\], ?\[/g, '],\n [');
       }
       return val;
+    }
+
+    function formatCellScalar(val) {
+      if (val === null || val === undefined) return '-';
+      if (typeof val === 'string') return val;
+      if (typeof val === 'boolean') return val ? 'true' : 'false';
+      return String(val);
+    }
+
+    function renderVarValue(container, vname, valStr, typeStr, elemDiff) {
+      var arr = parseArrayValue(valStr);
+      if (!arr) {
+        var valSpan = document.createElement('span');
+        valSpan.className = 'viz-val-text';
+        valSpan.textContent = formatVarValue(valStr);
+        container.appendChild(valSpan);
+        return;
+      }
+
+      var dim = getArrayDimension(arr);
+      var viewDiv = document.createElement('div');
+      viewDiv.className = 'viz-array-view';
+
+      // 1. Toolbar
+      var toolbar = document.createElement('div');
+      toolbar.className = 'viz-array-toolbar';
+
+      // Explore section
+      var exploreDiv = document.createElement('div');
+      exploreDiv.className = 'viz-array-explore';
+
+      var inputsRow = document.createElement('div');
+      inputsRow.className = 'viz-array-inputs-row';
+
+      var exploreLbl = document.createElement('span');
+      exploreLbl.className = 'viz-explorer-label';
+      exploreLbl.textContent = 'idx:';
+      inputsRow.appendChild(exploreLbl);
+
+      var inputIdx1 = null;
+      var inputIdx2 = null;
+      var inputIdx3 = null;
+
+      if (dim === 1) {
+        inputIdx1 = document.createElement('input');
+        inputIdx1.type = 'number';
+        inputIdx1.className = 'viz-idx-input viz-idx-1d';
+        inputIdx1.min = '0';
+        inputIdx1.max = String(Math.max(0, arr.length - 1));
+        inputIdx1.placeholder = 'i';
+        inputIdx1.title = 'Index [i]';
+        inputsRow.appendChild(inputIdx1);
+      } else if (dim === 2) {
+        inputIdx1 = document.createElement('input');
+        inputIdx1.type = 'number';
+        inputIdx1.className = 'viz-idx-input viz-idx-r';
+        inputIdx1.min = '0';
+        inputIdx1.max = String(Math.max(0, arr.length - 1));
+        inputIdx1.placeholder = 'r';
+        inputIdx1.title = 'Row [r]';
+        inputsRow.appendChild(inputIdx1);
+
+        inputIdx2 = document.createElement('input');
+        inputIdx2.type = 'number';
+        inputIdx2.className = 'viz-idx-input viz-idx-c';
+        inputIdx2.min = '0';
+        var maxCol = arr[0] ? arr[0].length - 1 : 0;
+        inputIdx2.max = String(Math.max(0, maxCol));
+        inputIdx2.placeholder = 'c';
+        inputIdx2.title = 'Col [c]';
+        inputsRow.appendChild(inputIdx2);
+      } else if (dim === 3) {
+        inputIdx1 = document.createElement('input');
+        inputIdx1.type = 'number';
+        inputIdx1.className = 'viz-idx-input';
+        inputIdx1.min = '0';
+        inputIdx1.max = String(Math.max(0, arr.length - 1));
+        inputIdx1.placeholder = 'd1';
+        inputsRow.appendChild(inputIdx1);
+
+        inputIdx2 = document.createElement('input');
+        inputIdx2.type = 'number';
+        inputIdx2.className = 'viz-idx-input';
+        inputIdx2.min = '0';
+        var maxD2 = arr[0] ? arr[0].length - 1 : 0;
+        inputIdx2.max = String(Math.max(0, maxD2));
+        inputIdx2.placeholder = 'd2';
+        inputsRow.appendChild(inputIdx2);
+
+        inputIdx3 = document.createElement('input');
+        inputIdx3.type = 'number';
+        inputIdx3.className = 'viz-idx-input';
+        inputIdx3.min = '0';
+        var maxD3 = (arr[0] && arr[0][0]) ? arr[0][0].length - 1 : 0;
+        inputIdx3.max = String(Math.max(0, maxD3));
+        inputIdx3.placeholder = 'd3';
+        inputsRow.appendChild(inputIdx3);
+      }
+
+      var toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'viz-view-toggle-btn';
+      toggleBtn.textContent = 'Raw';
+      toggleBtn.title = 'Toggle raw / tabular view';
+      inputsRow.appendChild(toggleBtn);
+
+      exploreDiv.appendChild(inputsRow);
+
+      // Inspect row directly underneath index field
+      var inspectRow = document.createElement('div');
+      inspectRow.className = 'viz-inspect-row';
+
+      var inspectBadge = document.createElement('span');
+      inspectBadge.className = 'viz-inspect-badge';
+      inspectRow.appendChild(inspectBadge);
+
+      exploreDiv.appendChild(inspectRow);
+      toolbar.appendChild(exploreDiv);
+      viewDiv.appendChild(toolbar);
+
+      // 2. Tabular Table Wrapper
+      var tableWrapper = document.createElement('div');
+      tableWrapper.className = 'viz-array-table-wrapper';
+
+      // 3. Raw view wrapper (hidden initially)
+      var rawPre = document.createElement('pre');
+      rawPre.className = 'viz-array-raw-view';
+      rawPre.style.display = 'none';
+      rawPre.textContent = formatVarValue(valStr);
+
+      var currentInspectedCell = null;
+
+      function highlightCell(cell, exprText) {
+        if (currentInspectedCell && currentInspectedCell !== cell) {
+          currentInspectedCell.classList.remove('viz-cell-inspected');
+        }
+        currentInspectedCell = cell;
+        if (cell) {
+          cell.classList.add('viz-cell-inspected');
+        }
+        inspectBadge.textContent = exprText || '';
+      }
+
+      function clearInspection() {
+        if (currentInspectedCell) {
+          currentInspectedCell.classList.remove('viz-cell-inspected');
+          currentInspectedCell = null;
+        }
+        inspectBadge.textContent = '';
+        var activeEl = (typeof document !== 'undefined') ? document.activeElement : null;
+        if (inputIdx1 && activeEl !== inputIdx1) {
+          inputIdx1.value = '';
+        }
+        if (inputIdx2 && activeEl !== inputIdx2) {
+          inputIdx2.value = '';
+        }
+        if (inputIdx3 && activeEl !== inputIdx3) {
+          inputIdx3.value = '';
+        }
+      }
+
+      function updateExploreFromInputs() {
+        if (dim === 1) {
+          var iVal = parseInt(inputIdx1.value, 10);
+          if (!isNaN(iVal) && iVal >= 0 && iVal < arr.length) {
+            var targetCell = tableWrapper.querySelector('.viz-cell-val[data-idx="' + iVal + '"]');
+            highlightCell(targetCell, vname + '[' + iVal + '] = ' + formatCellScalar(arr[iVal]));
+          } else {
+            highlightCell(null, '');
+          }
+        } else if (dim === 2) {
+          var rVal = parseInt(inputIdx1.value, 10);
+          var cVal = parseInt(inputIdx2.value, 10);
+          if (!isNaN(rVal) && !isNaN(cVal) && rVal >= 0 && rVal < arr.length && arr[rVal] && cVal >= 0 && cVal < arr[rVal].length) {
+            var targetCell2 = tableWrapper.querySelector('.viz-cell-val[data-row="' + rVal + '"][data-col="' + cVal + '"]');
+            highlightCell(targetCell2, vname + '[' + rVal + '][' + cVal + '] = ' + formatCellScalar(arr[rVal][cVal]));
+          } else {
+            highlightCell(null, '');
+          }
+        } else if (dim === 3) {
+          var d1Val = parseInt(inputIdx1.value, 10);
+          var d2Val = parseInt(inputIdx2.value, 10);
+          var d3Val = parseInt(inputIdx3.value, 10);
+          if (!isNaN(d1Val) && !isNaN(d2Val) && !isNaN(d3Val) && arr[d1Val] && arr[d1Val][d2Val] && arr[d1Val][d2Val][d3Val] !== undefined) {
+            if (selectSlice) selectSlice(d1Val);
+            var targetCell3 = tableWrapper.querySelector('.viz-cell-val[data-row="' + d2Val + '"][data-col="' + d3Val + '"]');
+            highlightCell(targetCell3, vname + '[' + d1Val + '][' + d2Val + '][' + d3Val + '] = ' + formatCellScalar(arr[d1Val][d2Val][d3Val]));
+          } else {
+            highlightCell(null, '');
+          }
+        }
+      }
+
+      if (inputIdx1) inputIdx1.addEventListener('input', updateExploreFromInputs);
+      if (inputIdx2) inputIdx2.addEventListener('input', updateExploreFromInputs);
+      if (inputIdx3) inputIdx3.addEventListener('input', updateExploreFromInputs);
+
+      toggleBtn.addEventListener('click', function () {
+        if (rawPre.style.display === 'none') {
+          rawPre.style.display = 'block';
+          tableWrapper.style.display = 'none';
+          toggleBtn.textContent = 'Table';
+        } else {
+          rawPre.style.display = 'none';
+          tableWrapper.style.display = 'block';
+          toggleBtn.textContent = 'Raw';
+        }
+      });
+
+      var selectSlice = null;
+
+      if (dim === 1) {
+        var table1d = document.createElement('table');
+        table1d.className = 'viz-array-table viz-1d-table';
+
+        var thead = document.createElement('thead');
+        var trIdx = document.createElement('tr');
+        var thCorner = document.createElement('th');
+        thCorner.className = 'viz-idx-corner';
+        thCorner.textContent = 'i';
+        trIdx.appendChild(thCorner);
+
+        for (var ci = 0; ci < arr.length; ci++) {
+          var th = document.createElement('th');
+          th.className = 'viz-idx-th';
+          th.textContent = '[' + ci + ']';
+          trIdx.appendChild(th);
+        }
+        thead.appendChild(trIdx);
+        table1d.appendChild(thead);
+
+        var tbody = document.createElement('tbody');
+        var trVal = document.createElement('tr');
+        var tdValLbl = document.createElement('td');
+        tdValLbl.className = 'viz-val-label';
+        tdValLbl.textContent = 'val';
+        trVal.appendChild(tdValLbl);
+
+        for (var vi = 0; vi < arr.length; vi++) {
+          var tdCell = document.createElement('td');
+          tdCell.className = 'viz-cell-val';
+          tdCell.dataset.idx = String(vi);
+          tdCell.textContent = formatCellScalar(arr[vi]);
+          if (elemDiff && elemDiff.has(String(vi))) {
+            tdCell.classList.add('viz-cell-changed');
+          }
+          (function (idx, cellVal, cellEl) {
+            cellEl.addEventListener('click', function () {
+              if (inputIdx1) inputIdx1.value = String(idx);
+              highlightCell(cellEl, vname + '[' + idx + '] = ' + formatCellScalar(cellVal));
+            });
+            cellEl.addEventListener('mouseenter', function () {
+              if (inputIdx1 && document.activeElement !== inputIdx1) {
+                inputIdx1.value = String(idx);
+                highlightCell(cellEl, vname + '[' + idx + '] = ' + formatCellScalar(cellVal));
+              }
+            });
+            cellEl.addEventListener('mouseleave', function () {
+              clearInspection();
+            });
+          })(vi, arr[vi], tdCell);
+          trVal.appendChild(tdCell);
+        }
+        tbody.appendChild(trVal);
+        table1d.appendChild(tbody);
+        tableWrapper.appendChild(table1d);
+
+      } else if (dim === 2) {
+        var table2d = document.createElement('table');
+        table2d.className = 'viz-array-table viz-2d-table';
+
+        var colCount = 0;
+        for (var r = 0; r < arr.length; r++) {
+          if (arr[r] && arr[r].length > colCount) colCount = arr[r].length;
+        }
+
+        var thead2d = document.createElement('thead');
+        var trTop = document.createElement('tr');
+        var thCorner2d = document.createElement('th');
+        thCorner2d.className = 'viz-idx-corner';
+        thCorner2d.textContent = 'r\\c';
+        trTop.appendChild(thCorner2d);
+
+        for (var c = 0; c < colCount; c++) {
+          var thC = document.createElement('th');
+          thC.className = 'viz-idx-th';
+          thC.textContent = '[' + c + ']';
+          trTop.appendChild(thC);
+        }
+        thead2d.appendChild(trTop);
+        table2d.appendChild(thead2d);
+
+        var tbody2d = document.createElement('tbody');
+        for (var row = 0; row < arr.length; row++) {
+          var trRow = document.createElement('tr');
+          var thRow = document.createElement('th');
+          thRow.className = 'viz-row-th';
+          thRow.textContent = '[' + row + ']';
+          trRow.appendChild(thRow);
+
+          var rowArr = arr[row] || [];
+          for (var col = 0; col < colCount; col++) {
+            var td2d = document.createElement('td');
+            td2d.className = 'viz-cell-val';
+            td2d.dataset.row = String(row);
+            td2d.dataset.col = String(col);
+            var val2d = rowArr[col];
+            td2d.textContent = formatCellScalar(val2d);
+            if (elemDiff && elemDiff.has(row + ',' + col)) {
+              td2d.classList.add('viz-cell-changed');
+            }
+            (function (rIdx, cIdx, cVal, el) {
+              el.addEventListener('click', function () {
+                if (inputIdx1) inputIdx1.value = String(rIdx);
+                if (inputIdx2) inputIdx2.value = String(cIdx);
+                highlightCell(el, vname + '[' + rIdx + '][' + cIdx + '] = ' + formatCellScalar(cVal));
+              });
+              el.addEventListener('mouseenter', function () {
+                if (inputIdx1 && document.activeElement !== inputIdx1 && document.activeElement !== inputIdx2) {
+                  inputIdx1.value = String(rIdx);
+                  if (inputIdx2) inputIdx2.value = String(cIdx);
+                  highlightCell(el, vname + '[' + rIdx + '][' + cIdx + '] = ' + formatCellScalar(cVal));
+                }
+              });
+              el.addEventListener('mouseleave', function () {
+                clearInspection();
+              });
+            })(row, col, val2d, td2d);
+            trRow.appendChild(td2d);
+          }
+          tbody2d.appendChild(trRow);
+        }
+        table2d.appendChild(tbody2d);
+        tableWrapper.appendChild(table2d);
+
+      } else if (dim === 3) {
+        var sliceTabBar = document.createElement('div');
+        sliceTabBar.className = 'viz-slice-tabs';
+
+        function renderSlice(sIdx) {
+          tableWrapper.innerHTML = '';
+          tableWrapper.appendChild(sliceTabBar);
+
+          var sliceButtons = sliceTabBar.querySelectorAll('.viz-slice-tab');
+          sliceButtons.forEach(function (btn, bIdx) {
+            btn.classList.toggle('active', bIdx === sIdx);
+          });
+
+          var sArr = arr[sIdx] || [];
+          var sCols = 0;
+          for (var sr = 0; sr < sArr.length; sr++) {
+            if (sArr[sr] && sArr[sr].length > sCols) sCols = sArr[sr].length;
+          }
+
+          var sTable = document.createElement('table');
+          sTable.className = 'viz-array-table viz-3d-slice-table';
+
+          var sThead = document.createElement('thead');
+          var sTrTop = document.createElement('tr');
+          var sThCorner = document.createElement('th');
+          sThCorner.className = 'viz-idx-corner';
+          sThCorner.textContent = '[' + sIdx + '][r][c]';
+          sTrTop.appendChild(sThCorner);
+
+          for (var sc = 0; sc < sCols; sc++) {
+            var thSc = document.createElement('th');
+            thSc.className = 'viz-idx-th';
+            thSc.textContent = '[' + sc + ']';
+            sTrTop.appendChild(thSc);
+          }
+          sThead.appendChild(sTrTop);
+          sTable.appendChild(sThead);
+
+          var sTbody = document.createElement('tbody');
+          for (var sRow = 0; sRow < sArr.length; sRow++) {
+            var sTrRow = document.createElement('tr');
+            var sThRow = document.createElement('th');
+            sThRow.className = 'viz-row-th';
+            sThRow.textContent = '[' + sRow + ']';
+            sTrRow.appendChild(sThRow);
+
+            var sRowArr = sArr[sRow] || [];
+            for (var sCol = 0; sCol < sCols; sCol++) {
+              var sTd = document.createElement('td');
+              sTd.className = 'viz-cell-val';
+              sTd.dataset.row = String(sRow);
+              sTd.dataset.col = String(sCol);
+              var sVal = sRowArr[sCol];
+              sTd.textContent = formatCellScalar(sVal);
+              if (elemDiff && elemDiff.has(sIdx + ',' + sRow + ',' + sCol)) {
+                sTd.classList.add('viz-cell-changed');
+              }
+              (function (sl, rI, cI, val, el) {
+                el.addEventListener('click', function () {
+                  if (inputIdx1) inputIdx1.value = String(sl);
+                  if (inputIdx2) inputIdx2.value = String(rI);
+                  if (inputIdx3) inputIdx3.value = String(cI);
+                  highlightCell(el, vname + '[' + sl + '][' + rI + '][' + cI + '] = ' + formatCellScalar(val));
+                });
+                el.addEventListener('mouseenter', function () {
+                  if (inputIdx1 && document.activeElement !== inputIdx1 && document.activeElement !== inputIdx2 && document.activeElement !== inputIdx3) {
+                    inputIdx1.value = String(sl);
+                    if (inputIdx2) inputIdx2.value = String(rI);
+                    if (inputIdx3) inputIdx3.value = String(cI);
+                    highlightCell(el, vname + '[' + sl + '][' + rI + '][' + cI + '] = ' + formatCellScalar(val));
+                  }
+                });
+                el.addEventListener('mouseleave', function () {
+                  clearInspection();
+                });
+              })(sIdx, sRow, sCol, sVal, sTd);
+              sTrRow.appendChild(sTd);
+            }
+            sTbody.appendChild(sTrRow);
+          }
+          sTable.appendChild(sTbody);
+          tableWrapper.appendChild(sTable);
+        }
+
+        for (var si = 0; si < arr.length; si++) {
+          var sBtn = document.createElement('button');
+          sBtn.type = 'button';
+          sBtn.className = 'viz-slice-tab' + (si === 0 ? ' active' : '');
+          sBtn.textContent = '[' + si + ']';
+          sBtn.title = 'View slice ' + si;
+          (function (sliceNum) {
+            sBtn.addEventListener('click', function () {
+              if (inputIdx1) inputIdx1.value = String(sliceNum);
+              renderSlice(sliceNum);
+            });
+          })(si);
+          sliceTabBar.appendChild(sBtn);
+        }
+
+        selectSlice = renderSlice;
+        renderSlice(0);
+      }
+
+      tableWrapper.addEventListener('mouseleave', function () {
+        clearInspection();
+      });
+
+      // Auto-inspect changed element if present
+      if (elemDiff && elemDiff.size > 0) {
+        var firstKey = elemDiff.values().next().value;
+        if (firstKey) {
+          if (dim === 1) {
+            var fiIdx = parseInt(firstKey, 10);
+            if (!isNaN(fiIdx) && fiIdx >= 0 && fiIdx < arr.length) {
+              if (inputIdx1) inputIdx1.value = String(fiIdx);
+              var cEl = tableWrapper.querySelector('.viz-cell-val[data-idx="' + fiIdx + '"]');
+              highlightCell(cEl, vname + '[' + fiIdx + '] = ' + formatCellScalar(arr[fiIdx]));
+            }
+          } else if (dim === 2) {
+            var parts = firstKey.split(',');
+            var frR = parseInt(parts[0], 10);
+            var frC = parseInt(parts[1], 10);
+            if (inputIdx1) inputIdx1.value = String(frR);
+            if (inputIdx2) inputIdx2.value = String(frC);
+            var cEl2 = tableWrapper.querySelector('.viz-cell-val[data-row="' + frR + '"][data-col="' + frC + '"]');
+            if (arr[frR]) {
+              highlightCell(cEl2, vname + '[' + frR + '][' + frC + '] = ' + formatCellScalar(arr[frR][frC]));
+            }
+          } else if (dim === 3) {
+            var parts3 = firstKey.split(',');
+            var fd1 = parseInt(parts3[0], 10);
+            var fd2 = parseInt(parts3[1], 10);
+            var fd3 = parseInt(parts3[2], 10);
+            if (selectSlice) selectSlice(fd1);
+            if (inputIdx1) inputIdx1.value = String(fd1);
+            if (inputIdx2) inputIdx2.value = String(fd2);
+            if (inputIdx3) inputIdx3.value = String(fd3);
+            var cEl3 = tableWrapper.querySelector('.viz-cell-val[data-row="' + fd2 + '"][data-col="' + fd3 + '"]');
+            if (arr[fd1] && arr[fd1][fd2]) {
+              highlightCell(cEl3, vname + '[' + fd1 + '][' + fd2 + '][' + fd3 + '] = ' + formatCellScalar(arr[fd1][fd2][fd3]));
+            }
+          }
+        }
+      }
+
+      viewDiv.appendChild(tableWrapper);
+      viewDiv.appendChild(rawPre);
+      container.appendChild(viewDiv);
     }
 
     function render(state) {
@@ -1318,8 +2393,11 @@ var CppVisualizer = (function () {
             var gTr = document.createElement('tr');
             gTr.dataset.frame = '-1';
             gTr.dataset.var = gName;
+            var elemDiff = (changedVars.elementDiffs && changedVars.elementDiffs.get('-1:' + gName)) || null;
             if (isVarChanged(changedVars, -1, gName, gv)) {
-              gTr.className = 'viz-changed';
+              if (!elemDiff || elemDiff.size === 0) {
+                gTr.className = 'viz-changed';
+              }
             }
             var gTdName = document.createElement('td');
             gTdName.textContent = gName;
@@ -1327,10 +2405,7 @@ var CppVisualizer = (function () {
             gTdType.textContent = gv.type;
             var gTdVal = document.createElement('td');
             gTdVal.className = 'viz-var-val';
-            var gValSpan = document.createElement('span');
-            gValSpan.className = 'viz-val-text';
-            gValSpan.textContent = formatVarValue(gv.val);
-            gTdVal.appendChild(gValSpan);
+            renderVarValue(gTdVal, gName, gv.val, gv.type, elemDiff);
 
             var gTargetHook = document.createElement('span');
             gTargetHook.className = 'viz-ref-target-hook';
@@ -1375,10 +2450,14 @@ var CppVisualizer = (function () {
               tr.dataset.var = vname;
               if (v.refVar) {
                 tr.dataset.refVar = v.refVar;
+                if (v.refBaseVar) tr.dataset.refBaseVar = v.refBaseVar;
                 tr.dataset.refFrame = String(v.refFrameIdx !== undefined ? v.refFrameIdx : -1);
               }
+              var elemDiff = (changedVars.elementDiffs && changedVars.elementDiffs.get(fi + ':' + vname)) || null;
               if (isVarChanged(changedVars, fi, vname, v)) {
-                tr.className = 'viz-changed';
+                if (!elemDiff || elemDiff.size === 0) {
+                  tr.className = 'viz-changed';
+                }
               }
               var tdName = document.createElement('td');
               tdName.textContent = vname;
@@ -1386,10 +2465,7 @@ var CppVisualizer = (function () {
               tdType.textContent = v.type;
               var tdVal = document.createElement('td');
               tdVal.className = 'viz-var-val';
-              var valSpan = document.createElement('span');
-              valSpan.className = 'viz-val-text';
-              valSpan.textContent = formatVarValue(v.val);
-              tdVal.appendChild(valSpan);
+              renderVarValue(tdVal, vname, v.val, v.type, elemDiff);
 
               if (v.refVar) {
                 var anchorDot = document.createElement('span');
@@ -1576,6 +2652,7 @@ var CppVisualizer = (function () {
                 val: ev.val,
                 addr: ev.addr,
                 refVar: refInfo ? refInfo.refVar : null,
+                refBaseVar: refInfo ? refInfo.refBaseVar : null,
                 refFrameIdx: refInfo ? refInfo.refFrameIdx : null
               };
             }
@@ -2441,93 +3518,6 @@ var CppVisualizer = (function () {
       '    return ss.str();',
       '  }',
       '',
-      '  template<typename T, size_t N>',
-      '  inline std::string serialize_arr(const T (&arr)[N], size_t) {',
-      '    return to_s(arr);',
-      '  }',
-      '',
-      '  template<typename T, size_t N>',
-      '  inline std::string serialize_arr(T (&arr)[N], size_t) {',
-      '    return to_s(arr);',
-      '  }',
-      '',
-      '  template<typename T>',
-      '  inline std::string serialize_arr(T* ptr, size_t size) {',
-      '    if (!ptr || size == 0) return "[]";',
-      '    std::ostringstream ss;',
-      '    ss << "[";',
-      '    for (size_t i = 0; i < size && i < 15; ++i) {',
-      '      if (i > 0) ss << ", ";',
-      '      ss << to_s(ptr[i]);',
-      '    }',
-      '    if (size > 15) ss << ", ...";',
-      '    ss << "]";',
-      '    return ss.str();',
-      '  }',
-      '',
-      '  template<typename T>',
-      '  inline std::string serialize_arr(const T* ptr, size_t size) {',
-      '    if (!ptr || size == 0) return "[]";',
-      '    std::ostringstream ss;',
-      '    ss << "[";',
-      '    for (size_t i = 0; i < size && i < 15; ++i) {',
-      '      if (i > 0) ss << ", ";',
-      '      ss << to_s(ptr[i]);',
-      '    }',
-      '    if (size > 15) ss << ", ...";',
-      '    ss << "]";',
-      '    return ss.str();',
-      '  }',
-      '',
-      '  inline std::string serialize_arr(const char* ptr, size_t size) {',
-      '    if (!ptr || size == 0) return "\\"\\"";',
-      '    std::ostringstream ss;',
-      '    ss << "\\"";',
-      '    for (size_t i = 0; i < size && i < 30; ++i) {',
-      '      if (ptr[i] == \'\\0\') break;',
-      '      if (ptr[i] == \'"\') ss << "\\\\\\\"";',
-      '      else if (ptr[i] == \'\\\\\') ss << "\\\\\\\\";',
-      '      else if (ptr[i] >= 32 && ptr[i] <= 126) ss << ptr[i];',
-      '      else ss << \' \';',
-      '    }',
-      '    ss << "\\"";',
-      '    return ss.str();',
-      '  }',
-      '',
-      '  inline std::string serialize_arr(char* ptr, size_t size) {',
-      '    return serialize_arr(const_cast<const char*>(ptr), size);',
-      '  }',
-      '',
-      '  template<typename T>',
-      '  inline std::string serialize_arr(const T& val, size_t) {',
-      '    return to_s(val);',
-      '  }',
-      '',
-      '  template<typename T, size_t N>',
-      '  inline uintptr_t get_arr_addr(const T (&arr)[N]) {',
-      '    return reinterpret_cast<uintptr_t>(std::addressof(arr));',
-      '  }',
-      '',
-      '  template<typename T, size_t N>',
-      '  inline uintptr_t get_arr_addr(T (&arr)[N]) {',
-      '    return reinterpret_cast<uintptr_t>(std::addressof(arr));',
-      '  }',
-      '',
-      '  template<typename T>',
-      '  inline uintptr_t get_arr_addr(const T* ptr) {',
-      '    return reinterpret_cast<uintptr_t>(ptr);',
-      '  }',
-      '',
-      '  template<typename T>',
-      '  inline uintptr_t get_arr_addr(T* ptr) {',
-      '    return reinterpret_cast<uintptr_t>(ptr);',
-      '  }',
-      '',
-      '  template<typename T>',
-      '  inline uintptr_t get_arr_addr(const T& val) {',
-      '    return reinterpret_cast<uintptr_t>(std::addressof(val));',
-      '  }',
-      '',
       '  inline std::string serialize_vla(const void* ptr, const char* type, size_t size) {',
       '    if (!ptr || size == 0) return "[]";',
       '    std::string t = type ? type : "";',
@@ -2620,22 +3610,87 @@ var CppVisualizer = (function () {
       '    return "[]";',
       '  }',
       '',
+      '  // Fixed-size compile-time arrays (1D, 2D, 3D, etc.)',
+      '  template<typename T, size_t N>',
+      '  inline void arr_decl(const char* name, const char* type, const T (&arr)[N], size_t, int ln) {',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"var_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type',
+      '       << "\\",\\"val\\":\\"" << escape_json(to_s(arr))',
+      '       << "\\",\\"addr\\":\\"" << get_addr(arr)',
+      '       << "\\",\\"line\\":" << ln << "}";',
+      '    emit(ss.str());',
+      '  }',
+      '',
+      '  template<typename T, size_t N>',
+      '  inline void arr_global_decl(const char* name, const char* type, const T (&arr)[N], size_t, int ln) {',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"global_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type',
+      '       << "\\",\\"val\\":\\"" << escape_json(to_s(arr))',
+      '       << "\\",\\"addr\\":\\"" << get_addr(arr)',
+      '       << "\\",\\"line\\":" << ln << "}";',
+      '    emit(ss.str());',
+      '  }',
+      '',
+      '  template<typename T, size_t N>',
+      '  inline void arr_set(const char* name, const char* type, const T (&arr)[N], size_t, int ln) {',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"var_set\\",\\"name\\":\\"" << name',
+      '       << "\\",\\"val\\":\\"" << escape_json(to_s(arr))',
+      '       << "\\",\\"addr\\":\\"" << get_addr(arr)',
+      '       << "\\",\\"line\\":" << ln << "}";',
+      '    emit(ss.str());',
+      '  }',
+      '',
+      '  template<typename T, size_t N>',
+      '  inline void arr_set(const char* name, const T (&arr)[N], size_t size, int ln) {',
+      '    arr_set(name, "", arr, size, ln);',
+      '  }',
+      '',
+      '  template<typename T, size_t N, typename E>',
+      '  inline void arr_io_input_event(const char* base_name, const T (&arr)[N], size_t, const char* expr_name, const E& expr_val, int ln, int c_from, int c_to) {',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"io\\",\\"io\\":\\"input\\",\\"name\\":\\"" << base_name',
+      '       << "\\",\\"val\\":\\"" << escape_json(to_s(arr))',
+      '       << "\\",\\"expr\\":\\"" << expr_name',
+      '       << "\\",\\"inputVal\\":\\"" << escape_json(to_s(expr_val))',
+      '       << "\\",\\"isGetline\\":false"',
+      '       << ",\\"colFrom\\":" << c_from',
+      '       << ",\\"colTo\\":" << c_to',
+      '       << ",\\"addr\\":\\"" << get_addr(arr) << "\\""',
+      '       << ",\\"line\\":" << ln << "}";',
+      '    emit(ss.str());',
+      '  }',
+      '',
+      '  // Non-template overloads for VLAs (Variable Length Arrays)',
       '  inline void arr_decl(const char* name, const char* type, const void* ptr, size_t size, int ln) {',
       '    std::ostringstream ss;',
-      '    ss << "{\\"e\\":\\"var_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, type, size)) << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr) << "\\",\\"line\\":" << ln << "}";',
+      '    ss << "{\\"e\\":\\"var_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type',
+      '       << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, type, size))',
+      '       << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr)',
+      '       << "\\",\\"line\\":" << ln << "}";',
       '    emit(ss.str());',
       '  }',
       '',
       '  inline void arr_global_decl(const char* name, const char* type, const void* ptr, size_t size, int ln) {',
       '    std::ostringstream ss;',
-      '    ss << "{\\"e\\":\\"global_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, type, size)) << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr) << "\\",\\"line\\":" << ln << "}";',
+      '    ss << "{\\"e\\":\\"global_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type',
+      '       << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, type, size))',
+      '       << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr)',
+      '       << "\\",\\"line\\":" << ln << "}";',
+      '    emit(ss.str());',
+      '  }',
+      '',
+      '  inline void arr_set(const char* name, const char* type, const void* ptr, size_t size, int ln) {',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"var_set\\",\\"name\\":\\"" << name',
+      '       << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, type, size))',
+      '       << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr)',
+      '       << "\\",\\"line\\":" << ln << "}";',
       '    emit(ss.str());',
       '  }',
       '',
       '  inline void arr_set(const char* name, const void* ptr, size_t size, int ln) {',
-      '    std::ostringstream ss;',
-      '    ss << "{\\"e\\":\\"var_set\\",\\"name\\":\\"" << name << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, "", size)) << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr) << "\\",\\"line\\":" << ln << "}";',
-      '    emit(ss.str());',
+      '    arr_set(name, "", ptr, size, ln);',
       '  }',
       '',
       '  template<typename E>',
@@ -2653,40 +3708,30 @@ var CppVisualizer = (function () {
       '    emit(ss.str());',
       '  }',
       '',
-      '  template<typename T, typename S>',
-      '  inline void arr_decl(const char* name, const char* type, T&& arr, S size, int ln) {',
+      '  // Pointer overloads for decayed array parameters',
+      '  template<typename T>',
+      '  inline void arr_decl(const char* name, const char* type, const T* ptr, size_t size, int ln) {',
       '    std::ostringstream ss;',
-      '    ss << "{\\"e\\":\\"var_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type << "\\",\\"val\\":\\"" << escape_json(serialize_arr(arr, size)) << "\\",\\"addr\\":\\"" << get_arr_addr(arr) << "\\",\\"line\\":" << ln << "}";',
+      '    ss << "{\\"e\\":\\"var_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type',
+      '       << "\\",\\"val\\":\\"" << escape_json(arr_to_s(ptr, size))',
+      '       << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr)',
+      '       << "\\",\\"line\\":" << ln << "}";',
       '    emit(ss.str());',
       '  }',
       '',
       '  template<typename T>',
-      '  inline void arr_decl(const char* name, const char* type, T&& arr, int ln) {',
-      '    arr_decl(name, type, std::forward<T>(arr), 0, ln);',
-      '  }',
-      '',
-      '  template<typename T, typename S>',
-      '  inline void arr_global_decl(const char* name, const char* type, T&& arr, S size, int ln) {',
+      '  inline void arr_set(const char* name, const char* type, const T* ptr, size_t size, int ln) {',
       '    std::ostringstream ss;',
-      '    ss << "{\\"e\\":\\"global_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type << "\\",\\"val\\":\\"" << escape_json(serialize_arr(arr, size)) << "\\",\\"addr\\":\\"" << get_arr_addr(arr) << "\\",\\"line\\":" << ln << "}";',
+      '    ss << "{\\"e\\":\\"var_set\\",\\"name\\":\\"" << name',
+      '       << "\\",\\"val\\":\\"" << escape_json(arr_to_s(ptr, size))',
+      '       << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr)',
+      '       << "\\",\\"line\\":" << ln << "}";',
       '    emit(ss.str());',
       '  }',
       '',
       '  template<typename T>',
-      '  inline void arr_global_decl(const char* name, const char* type, T&& arr, int ln) {',
-      '    arr_global_decl(name, type, std::forward<T>(arr), 0, ln);',
-      '  }',
-      '',
-      '  template<typename T, typename S>',
-      '  inline void arr_set(const char* name, T&& arr, S size, int ln) {',
-      '    std::ostringstream ss;',
-      '    ss << "{\\"e\\":\\"var_set\\",\\"name\\":\\"" << name << "\\",\\"val\\":\\"" << escape_json(serialize_arr(arr, size)) << "\\",\\"addr\\":\\"" << get_arr_addr(arr) << "\\",\\"line\\":" << ln << "}";',
-      '    emit(ss.str());',
-      '  }',
-      '',
-      '  template<typename T>',
-      '  inline void arr_set(const char* name, T&& arr, int ln) {',
-      '    arr_set(name, std::forward<T>(arr), 0, ln);',
+      '  inline void arr_set(const char* name, const T* ptr, size_t size, int ln) {',
+      '    arr_set(name, "", ptr, size, ln);',
       '  }',
       '',
       '  template<typename T>',
@@ -2842,6 +3887,7 @@ var CppVisualizer = (function () {
     const lines = userCode.split('\n');
     const outLines = [];
     const knownArrays = new Set();
+    const knownArrayTypes = new Map();
     let scopeStack = [];
     const activeForLoops = [];
     let inFunction = false;
@@ -2885,8 +3931,11 @@ var CppVisualizer = (function () {
         const dm = parseDecl(pLine);
         if (dm) {
           for (const v of dm.vars) {
-            if (v.isArray) knownArrays.add(v.name);
             const actualType = v.arrType || (dm.type + (v.isArray ? '[]' : ''));
+            if (v.isArray) {
+              knownArrays.add(v.name);
+              knownArrayTypes.set(v.name, actualType);
+            }
             globalVars.push({ name: v.name, type: actualType, line: pi + 1, isArray: v.isArray });
           }
         }
@@ -2928,7 +3977,10 @@ var CppVisualizer = (function () {
             const pObj = parseParam(p);
             if (pObj) {
               params.push(pObj);
-              if (pObj.isArray) knownArrays.add(pObj.name);
+              if (pObj.isArray) {
+                knownArrays.add(pObj.name);
+                knownArrayTypes.set(pObj.name, pObj.type);
+              }
             }
           }
         }
@@ -2974,7 +4026,10 @@ var CppVisualizer = (function () {
             const pObj = parseParam(p);
             if (pObj) {
               params.push(pObj);
-              if (pObj.isArray) knownArrays.add(pObj.name);
+              if (pObj.isArray) {
+                knownArrays.add(pObj.name);
+                knownArrayTypes.set(pObj.name, pObj.type);
+              }
             }
           }
         }
@@ -3170,15 +4225,15 @@ var CppVisualizer = (function () {
         if (v && !reserved.has(v) && !/^\d+$/.test(v)) modifiedVars.add(v);
       }
 
-      // Array assignments: arr[i] = val, arr[i] += val, etc.
-      const arrAssignRe = /(?:^|[;{}(,\s])([a-zA-Z_0-9]+)\s*\[.+?\]\s*(?:=(?!=)|\+=|-=|\*=|\/=|%=|<<=|>>=|&=|\^=|\|=)/g;
+      // Array assignments: arr[i] = val, arr[i][j] = val, etc.
+      const arrAssignRe = /(?:^|[;{}(,\s])([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])+\s*(?:=(?!=)|\+=|-=|\*=|\/=|%=|<<=|>>=|&=|\^=|\|=)/g;
       let aam;
       while ((aam = arrAssignRe.exec(trimmedCode)) !== null) {
         if (!reserved.has(aam[1])) modifiedVars.add(aam[1]);
       }
 
-      // Array inc/dec: arr[i]++, ++arr[i], arr[i]--, --arr[i]
-      const arrIncDecRe = /(?:^|[;{}(,\s])([a-zA-Z_0-9]+)\s*\[.+?\]\s*(\+\+|--)|(?:^|[;{}(,\s])(\+\+|--)\s*([a-zA-Z_0-9]+)\s*\[.+?\]/g;
+      // Array inc/dec: arr[i]++, ++arr[i], arr[i][j]++, etc.
+      const arrIncDecRe = /(?:^|[;{}(,\s])([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])+\s*(\+\+|--)|(?:^|[;{}(,\s])(\+\+|--)\s*([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])+/g;
       let aim;
       while ((aim = arrIncDecRe.exec(trimmedCode)) !== null) {
         const v = aim[1] || aim[4];
@@ -3186,7 +4241,7 @@ var CppVisualizer = (function () {
       }
 
       // Container method calls: v.push_back(...), v.pop_back(), arr[i].push_back(...), etc.
-      const containerMethodRe = /(?:^|[;{}(,\s])([a-zA-Z_0-9]+)(?:\s*\[.+?\])?\s*\.\s*(?:push_back|emplace_back|pop_back|push|pop|insert|emplace|erase|clear|resize|assign|shrink_to_fit|swap)\s*\(/g;
+      const containerMethodRe = /(?:^|[;{}(,\s])([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])*\s*\.\s*(?:push_back|emplace_back|pop_back|push|pop|insert|emplace|erase|clear|resize|assign|shrink_to_fit|swap)\s*\(/g;
       let cmm;
       while ((cmm = containerMethodRe.exec(trimmedCode)) !== null) {
         if (!reserved.has(cmm[1])) modifiedVars.add(cmm[1]);
@@ -3199,8 +4254,8 @@ var CppVisualizer = (function () {
         if (!reserved.has(algom[1])) modifiedVars.add(algom[1]);
       }
 
-      // Container swap: swap(a, b), swap(arr[i], arr[j])
-      const swapRe = /(?:^|[;{}(,\s])(?:std::)?swap\s*\(\s*([a-zA-Z_0-9]+)(?:\s*\[.+?\])?\s*,\s*([a-zA-Z_0-9]+)(?:\s*\[.+?\])?\s*\)/g;
+      // Container swap: swap(a, b), swap(arr[i], arr[j]), swap(grid[i][j], grid[x][y])
+      const swapRe = /(?:^|[;{}(,\s])(?:std::)?swap\s*\(\s*([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])*\s*,\s*([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])*\s*\)/g;
       let sm;
       while ((sm = swapRe.exec(trimmedCode)) !== null) {
         if (!reserved.has(sm[1])) modifiedVars.add(sm[1]);
@@ -3333,6 +4388,7 @@ var CppVisualizer = (function () {
           if (v.isArray) {
             knownArrays.add(v.name);
             const actualType = v.arrType || (declMatch.type + '[]');
+            knownArrayTypes.set(v.name, actualType);
             outLines.push(`    __viz::arr_decl("${v.name}", "${actualType}", ${v.name}, sizeof(${v.name})/sizeof(${v.name}[0]), ${lineNum});`);
           } else {
             outLines.push(`    __viz::var_decl("${v.name}", "${declMatch.type}", ${v.name}, ${lineNum});`);
@@ -3344,7 +4400,8 @@ var CppVisualizer = (function () {
         for (const varName of modifiedVars) {
           if ((!declNames || !declNames.has(varName)) && !inputBaseNames.has(varName)) {
             if (knownArrays.has(varName)) {
-              outLines.push(`    __viz::arr_set("${varName}", ${varName}, sizeof(${varName})/sizeof(${varName}[0]), ${lineNum});`);
+              const aType = knownArrayTypes.get(varName) || '';
+              outLines.push(`    __viz::arr_set("${varName}", "${aType}", ${varName}, sizeof(${varName})/sizeof(${varName}[0]), ${lineNum});`);
             } else {
               outLines.push(`    __viz::var_set("${varName}", ${varName}, ${lineNum});`);
             }
