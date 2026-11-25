@@ -393,6 +393,29 @@
   </div>
 </dialog>
 
+<dialog id="collab-timeout-dialog" class="modal-dialog collab-timeout-dialog" aria-labelledby="collab-timeout-title">
+  <div class="modal-head">
+    <h3 id="collab-timeout-title">Connection Timeout</h3>
+    <button type="button" class="icon-btn modal-close" id="collab-timeout-close" title="Close"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 2.5l9 9M11.5 2.5l-9 9"/></svg></button>
+  </div>
+  <div class="modal-body collab-timeout-body">
+    <div class="collab-timeout-status-row">
+      <span class="collab-timeout-badge">Unable to connect</span>
+      <span class="collab-timeout-room">Room: <code id="collab-timeout-room-id"></code></span>
+    </div>
+    <p class="collab-timeout-msg">Could not connect to this collaboration room after 10 seconds.</p>
+    <div class="collab-timeout-reason-box">
+      <div class="collab-timeout-reason-lbl">Reason:</div>
+      <div class="collab-timeout-reason-text" id="collab-timeout-reason-text">No one hosting the room.</div>
+    </div>
+    <p class="collab-timeout-help" id="collab-timeout-help">The host may be offline or the room link may be inactive. Would you like to create a new room or keep waiting?</p>
+  </div>
+  <div class="modal-foot">
+    <button type="button" class="btn" id="collab-timeout-wait">Wait</button>
+    <button type="button" class="btn primary" id="collab-timeout-create">Create room</button>
+  </div>
+</dialog>
+
 <script src="src/vendors/editor/editor.bundle.js"></script>
 <script src="src/js/editor.js?v=1.1"></script>
 

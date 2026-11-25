@@ -1664,3 +1664,70 @@ body.show-visualizer .cm-content {
   color: #fff;
   border-color: var(--ok);
 }
+
+/* ── Collab Connection Timeout Dialog ────────────────────────────── */
+.collab-timeout-dialog {
+  width: min(440px, 92vw);
+}
+.collab-timeout-body {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.collab-timeout-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+.collab-timeout-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(240, 168, 48, 0.15);
+  color: var(--amber);
+  font-weight: 600;
+  font-size: 11.5px;
+}
+.collab-timeout-room code {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+.collab-timeout-msg {
+  font-size: 13.5px;
+  color: var(--ink);
+  margin: 0;
+  line-height: 1.4;
+}
+.collab-timeout-reason-box {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.collab-timeout-reason-lbl {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.collab-timeout-reason-text {
+  font-size: 12.5px;
+  color: var(--ink);
+  line-height: 1.4;
+}
+.collab-timeout-help {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.4;
+}

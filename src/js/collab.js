@@ -219,10 +219,78 @@ window.CppWasmCollabInstall = function (app) {
   }
 
   /* ---------------- joining and leaving ---------------- */
+  const CONNECT_TIMEOUT_MS = 10000;
+
+  function closeTimeoutDialog() {
+    const dlg = document.getElementById('collab-timeout-dialog');
+    if (dlg && dlg.open) dlg.close();
+  }
+
+  function showTimeoutDialog(roomId, reason, helpText) {
+    const dlg = document.getElementById('collab-timeout-dialog');
+    if (!dlg) return;
+
+    const roomEl = document.getElementById('collab-timeout-room-id');
+    const reasonEl = document.getElementById('collab-timeout-reason-text');
+    const helpEl = document.getElementById('collab-timeout-help');
+    const waitBtn = document.getElementById('collab-timeout-wait');
+    const createBtn = document.getElementById('collab-timeout-create');
+    const closeBtn = document.getElementById('collab-timeout-close');
+
+    if (roomEl) roomEl.textContent = roomId || (session ? session.id : '');
+    if (reasonEl) reasonEl.textContent = reason || 'No one hosting the room.';
+    if (helpEl && helpText) helpEl.textContent = helpText;
+
+    const onWait = () => {
+      dlg.close();
+      if (session && !session.synced) {
+        clearTimeout(session.connectTimeoutTimer);
+        session.connectTimeoutTimer = setTimeout(() => {
+          checkConnectionTimeout(session);
+        }, 15000);
+      }
+    };
+
+    if (waitBtn) waitBtn.onclick = onWait;
+    if (closeBtn) closeBtn.onclick = onWait;
+
+    if (createBtn) {
+      createBtn.onclick = () => {
+        dlg.close();
+        createRoom();
+      };
+    }
+
+    if (!dlg.open) dlg.showModal();
+  }
+
+  function checkConnectionTimeout(s) {
+    if (!session || session !== s) return;
+    if (session.synced) return;
+
+    let reason = '';
+    let help = '';
+
+    if (session.error) {
+      reason = session.error;
+      help = 'A direct WebRTC peer connection could not be established. You can create a new room or continue waiting.';
+    } else if (session.peers.size === 0) {
+      reason = 'No one hosting the room.';
+      help = 'The room link may be inactive or all participants have left. You can create a fresh room or keep waiting for someone to join.';
+    } else {
+      reason = 'Failed to connect to the Peer.';
+      help = 'Connected to peer over the network, but room file data was not received. You can create your own room or wait.';
+    }
+
+    showTimeoutDialog(session.id, reason, help);
+  }
+
   function markSynced() {
     if (!session || session.synced) return;
     session.synced = true;
     clearTimeout(session.lonelyTimer);
+    clearTimeout(session.connectTimeoutTimer);
+    closeTimeoutDialog();
     app.setFileActionsEnabled(true);
     renderPanel();
   }
@@ -239,7 +307,7 @@ window.CppWasmCollabInstall = function (app) {
     session = {
       id, ydoc, yfiles, yorder, awareness, meta: ydoc.getMap('meta'),
       undos: new Map(),
-      peers: new Set(), synced: false, host: !!asHost, local, lonelyTimer: 0, error: '',
+      peers: new Set(), synced: false, host: !!asHost, local, lonelyTimer: 0, connectTimeoutTimer: 0, error: '',
       name: '',
     };
     session.meta.observe(readName);
@@ -258,6 +326,9 @@ window.CppWasmCollabInstall = function (app) {
       app.setFileActionsEnabled(false);
       showPlaceholder('// Connecting to room ' + id + '…\n// The files appear as soon as someone in the room is online.\n');
       session.lonelyTimer = setTimeout(renderPanel, 15000);
+      session.connectTimeoutTimer = setTimeout(() => {
+        checkConnectionTimeout(session);
+      }, CONNECT_TIMEOUT_MS);
     }
 
     let room;
@@ -267,14 +338,16 @@ window.CppWasmCollabInstall = function (app) {
       room = joinRoom(config, id, {
         onJoinError: (details) => {
           if (!session) return;
-          session.error = 'A direct connection to a peer failed. Networks that block peer-to-peer traffic need a TURN server (see README).';
+          session.error = 'Failed to connect to the Peer. Networks that block peer-to-peer traffic need a TURN server.';
           console.warn('cpp.wasm collab:', details);
           renderPanel();
+          checkConnectionTimeout(session);
         },
       });
     } catch (e) {
       session.error = 'Couldn’t open the room: ' + (e && e.message ? e.message : e);
       renderPanel();
+      checkConnectionTimeout(session);
       return;
     }
     session.room = room;
@@ -374,6 +447,8 @@ window.CppWasmCollabInstall = function (app) {
     if (!session) return;
     const s = session;
     clearTimeout(s.lonelyTimer);
+    clearTimeout(s.connectTimeoutTimer);
+    closeTimeoutDialog();
     app.cm.setState(app.cm.newState(''));   // detach the editor from the room's text first
     s.undos.forEach((um) => um.destroy());
     try { A.removeAwarenessStates(s.awareness, [s.ydoc.clientID], 'local'); } catch (e) {}
