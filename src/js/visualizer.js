@@ -3884,7 +3884,221 @@ var CppVisualizer = (function () {
       ''
     ].join('\n');
 
-    const lines = userCode.split('\n');
+    function splitSameLineControl(line) {
+      let code = line;
+      const commentIdx = line.indexOf('//');
+      if (commentIdx !== -1) {
+        let inStr = false, quote = '';
+        for (let c = 0; c < commentIdx; c++) {
+          if ((line[c] === '"' || line[c] === "'") && (c === 0 || line[c - 1] !== '\\')) {
+            if (!inStr) { inStr = true; quote = line[c]; }
+            else if (quote === line[c]) inStr = false;
+          }
+        }
+        if (!inStr) code = line.slice(0, commentIdx);
+      }
+
+      const trimmed = code.trim();
+      if (!trimmed || trimmed.startsWith('#')) return [line];
+
+      const indentMatch = code.match(/^(\s*)/);
+      const indent = indentMatch ? indentMatch[1] : '';
+
+      const ctrlMatch = trimmed.match(/^(?:(?:\}\s*)?else\s+if|if|while|for)\s*\(/);
+      if (ctrlMatch) {
+        const kwStart = code.indexOf(ctrlMatch[0]);
+        const openParen = code.indexOf('(', kwStart);
+        let depth = 0;
+        let closeParen = -1;
+        let inStr = false, quote = '';
+        for (let i = openParen; i < code.length; i++) {
+          const c = code[i];
+          if ((c === '"' || c === "'") && (i === 0 || code[i - 1] !== '\\')) {
+            if (!inStr) { inStr = true; quote = c; }
+            else if (quote === c) inStr = false;
+          } else if (!inStr) {
+            if (c === '(') depth++;
+            else if (c === ')') {
+              depth--;
+              if (depth === 0) { closeParen = i; break; }
+            }
+          }
+        }
+
+        if (closeParen !== -1) {
+          const header = code.slice(0, closeParen + 1);
+          const rest = code.slice(closeParen + 1).trim();
+          if (rest.length > 0 && !rest.startsWith('{') && !rest.startsWith(';')) {
+            const sub = splitRest(rest, indent + '    ');
+            return [header, ...sub];
+          }
+        }
+      }
+
+      const elseMatch = trimmed.match(/^(?:(?:\}\s*)?)else(?:\s+|$)(.*)/);
+      if (elseMatch && !trimmed.startsWith('else if')) {
+        const kwStart = code.indexOf('else');
+        const header = code.slice(0, kwStart + 4);
+        const rest = code.slice(kwStart + 4).trim();
+        if (rest.length > 0 && !rest.startsWith('{') && !rest.startsWith(';') && !rest.startsWith('if')) {
+          const sub = splitRest(rest, indent + '    ');
+          return [header, ...sub];
+        }
+      }
+
+      return [line];
+    }
+
+    function splitRest(rest, indent) {
+      let elseIdx = -1;
+      let inStr = false, quote = '', depth = 0;
+      for (let i = 0; i < rest.length; i++) {
+        const c = rest[i];
+        if ((c === '"' || c === "'") && (i === 0 || rest[i - 1] !== '\\')) {
+          if (!inStr) { inStr = true; quote = c; }
+          else if (quote === c) inStr = false;
+        } else if (!inStr) {
+          if (c === '(' || c === '{') depth++;
+          else if (c === ')' || c === '}') depth--;
+          else if (depth === 0 && rest.slice(i).match(/^else\b/)) {
+            elseIdx = i;
+            break;
+          }
+        }
+      }
+
+      if (elseIdx !== -1) {
+        const firstPart = rest.slice(0, elseIdx).trim();
+        const elsePart = rest.slice(elseIdx).trim();
+        const res = [];
+        if (firstPart) res.push(...splitSameLineControl(indent + firstPart));
+        if (elsePart) res.push(...splitSameLineControl(indent + elsePart));
+        return res;
+      }
+
+      return [indent + rest];
+    }
+
+    function checkBracelessControlHeader(line) {
+      let code = line;
+      const commentIdx = line.indexOf('//');
+      if (commentIdx !== -1) {
+        let inStr = false, quote = '';
+        for (let c = 0; c < commentIdx; c++) {
+          if ((line[c] === '"' || line[c] === "'") && (c === 0 || line[c - 1] !== '\\')) {
+            if (!inStr) { inStr = true; quote = line[c]; }
+            else if (quote === line[c]) inStr = false;
+          }
+        }
+        if (!inStr) code = line.slice(0, commentIdx);
+      }
+
+      const trimmed = code.trim();
+      if (trimmed.endsWith('{') || trimmed.endsWith(';') || trimmed.endsWith(':')) return false;
+
+      const ctrlMatch = trimmed.match(/^(?:(?:\}\s*)?else\s+if|if|while|for)\s*\(/);
+      if (ctrlMatch) {
+        const kwStart = code.indexOf(ctrlMatch[0]);
+        const openParen = code.indexOf('(', kwStart);
+        let depth = 0;
+        let closeParen = -1;
+        let inStr = false, quote = '';
+        for (let i = openParen; i < code.length; i++) {
+          const c = code[i];
+          if ((c === '"' || c === "'") && (i === 0 || code[i - 1] !== '\\')) {
+            if (!inStr) { inStr = true; quote = c; }
+            else if (quote === line[c]) inStr = false;
+          } else if (!inStr) {
+            if (c === '(') depth++;
+            else if (c === ')') {
+              depth--;
+              if (depth === 0) { closeParen = i; break; }
+            }
+          }
+        }
+        if (closeParen !== -1) {
+          const rest = code.slice(closeParen + 1).trim();
+          if (rest === '' || rest === '{') {
+            return rest === '';
+          }
+        }
+      }
+
+      if (/^(?:(?:\}\s*)?)else\s*$/.test(trimmed)) {
+        return true;
+      }
+
+      return false;
+    }
+
+    function normalizeControlFlow(code) {
+      const rawLines = code.split('\n');
+      const step1 = [];
+
+      for (let i = 0; i < rawLines.length; i++) {
+        const origLineNum = i + 1;
+        const split = splitSameLineControl(rawLines[i]);
+        for (const s of split) {
+          step1.push({ text: s, origLineNum });
+        }
+      }
+
+      const step2 = [];
+      const pendingCloses = [];
+
+      for (let i = 0; i < step1.length; i++) {
+        const item = step1[i];
+        const line = item.text;
+        const origLineNum = item.origLineNum;
+        const trimmed = line.trim();
+
+        if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//') || trimmed.startsWith('/*')) {
+          step2.push(item);
+          continue;
+        }
+
+        const isControlHeader = checkBracelessControlHeader(line);
+        if (isControlHeader) {
+          step2.push({ text: line + ' {', origLineNum });
+          pendingCloses.push({ needStatement: true });
+          continue;
+        }
+
+        step2.push(item);
+
+        if (trimmed.endsWith(';') || trimmed.endsWith('}')) {
+          while (pendingCloses.length > 0) {
+            const top = pendingCloses[pendingCloses.length - 1];
+            if (top.needStatement) {
+              pendingCloses.pop();
+              let nextIsElse = false;
+              for (let j = i + 1; j < step1.length; j++) {
+                const nextTrimmed = step1[j].text.trim();
+                if (!nextTrimmed || nextTrimmed.startsWith('//') || nextTrimmed.startsWith('/*')) continue;
+                if (/^(?:\}\s*)?else\b/.test(nextTrimmed)) nextIsElse = true;
+                break;
+              }
+              const indent = line.match(/^(\s*)/)[1];
+              step2.push({ text: indent + '}', origLineNum });
+              if (nextIsElse) break;
+            } else {
+              break;
+            }
+          }
+        }
+      }
+
+      while (pendingCloses.length > 0) {
+        pendingCloses.pop();
+        step2.push({ text: '}', origLineNum: rawLines.length });
+      }
+
+      return step2;
+    }
+
+    const normalized = normalizeControlFlow(userCode);
+    const lines = normalized.map(x => x.text);
+    const lineNums = normalized.map(x => x.origLineNum);
     const outLines = [];
     const knownArrays = new Set();
     const knownArrayTypes = new Map();
@@ -3936,7 +4150,7 @@ var CppVisualizer = (function () {
               knownArrays.add(v.name);
               knownArrayTypes.set(v.name, actualType);
             }
-            globalVars.push({ name: v.name, type: actualType, line: pi + 1, isArray: v.isArray });
+            globalVars.push({ name: v.name, type: actualType, line: lineNums[pi], isArray: v.isArray });
           }
         }
       }
@@ -3956,7 +4170,7 @@ var CppVisualizer = (function () {
 
     for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
       const rawLine = lines[lineIdx];
-      const lineNum = lineIdx + 1;
+      const lineNum = lineNums[lineIdx];
       const trimmed = rawLine.trim();
 
       // Check preprocessor, comments, empty
@@ -4121,7 +4335,13 @@ var CppVisualizer = (function () {
             const v0 = initVars[0], v1 = initVars[1];
             incWrapped = `((${incText}), __viz::for_step2("${v0.name}", ${v0.name}, "${v1.name}", ${v1.name}, ${lineNum}, ${incFrom}, ${incTo}))`;
           } else {
-            incWrapped = `((${incText}), __viz::for_step_simple(${lineNum}, ${incFrom}, ${incTo}))`;
+            const incVarM = incText.match(/(?:^|[^a-zA-Z_0-9])([a-zA-Z_0-9]+)\s*(?:\+\+|--|\+=|-=|=)|(?:^|[^a-zA-Z_0-9])(?:\+\+|--)\s*([a-zA-Z_0-9]+)/);
+            if (incVarM) {
+              const vn = incVarM[1] || incVarM[2];
+              incWrapped = `((${incText}), __viz::for_step("${vn}", ${vn}, ${lineNum}, ${incFrom}, ${incTo}))`;
+            } else {
+              incWrapped = `((${incText}), __viz::for_step_simple(${lineNum}, ${incFrom}, ${incTo}))`;
+            }
           }
         }
 
@@ -4218,7 +4438,7 @@ var CppVisualizer = (function () {
       while ((am = assignRe.exec(trimmedCode)) !== null) {
         if (!reserved.has(am[1])) modifiedVars.add(am[1]);
       }
-      const incDecRe = /(?:^|[;{}(,\s])([a-zA-Z_0-9]+)\s*(\+\+|--)|(?:^|[;{}(,\s])(\+\+|--)\s*([a-zA-Z_0-9]+)/g;
+      const incDecRe = /(?:^|[^a-zA-Z_0-9])([a-zA-Z_0-9]+)\s*(\+\+|--)|(?:^|[^a-zA-Z_0-9])(\+\+|--)\s*([a-zA-Z_0-9]+)/g;
       let im;
       while ((im = incDecRe.exec(trimmedCode)) !== null) {
         const v = im[1] || im[4];
@@ -4226,14 +4446,14 @@ var CppVisualizer = (function () {
       }
 
       // Array assignments: arr[i] = val, arr[i][j] = val, etc.
-      const arrAssignRe = /(?:^|[;{}(,\s])([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])+\s*(?:=(?!=)|\+=|-=|\*=|\/=|%=|<<=|>>=|&=|\^=|\|=)/g;
+      const arrAssignRe = /(?:^|[^a-zA-Z_0-9])([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])+\s*(?:=(?!=)|\+=|-=|\*=|\/=|%=|<<=|>>=|&=|\^=|\|=)/g;
       let aam;
       while ((aam = arrAssignRe.exec(trimmedCode)) !== null) {
         if (!reserved.has(aam[1])) modifiedVars.add(aam[1]);
       }
 
       // Array inc/dec: arr[i]++, ++arr[i], arr[i][j]++, etc.
-      const arrIncDecRe = /(?:^|[;{}(,\s])([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])+\s*(\+\+|--)|(?:^|[;{}(,\s])(\+\+|--)\s*([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])+/g;
+      const arrIncDecRe = /(?:^|[^a-zA-Z_0-9])([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])+\s*(\+\+|--)|(?:^|[^a-zA-Z_0-9])(\+\+|--)\s*([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])+/g;
       let aim;
       while ((aim = arrIncDecRe.exec(trimmedCode)) !== null) {
         const v = aim[1] || aim[4];
