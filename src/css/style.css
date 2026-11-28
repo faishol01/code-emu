@@ -281,7 +281,7 @@ body.resizing-panels textarea {
   background: none; border: 0; color: var(--muted); font-size: 12px; cursor: pointer; padding: 0;
 }
 .pane-head button:hover { color: var(--ink); text-decoration: underline; }
-.side { display: grid; grid-template-rows: minmax(110px, .38fr) minmax(0, 1fr); gap: 12px; min-height: 0; }
+.side { display: grid; grid-template-rows: minmax(110px, .38fr) minmax(0, 1fr); gap: 12px; min-height: 0; min-width: 0; }
 body.mode-interactive .side { grid-template-rows: minmax(0, 1fr); }
 body.mode-interactive #input-pane { display: none; }
 .head-right { display: flex; align-items: center; gap: 14px; }

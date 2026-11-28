@@ -319,6 +319,12 @@ var CppVisualizer = (function () {
   min-height: 18px;
   display: inline-flex;
   align-items: center;
+  font-family: var(--mono);
+}
+.viz-inspect-badge.viz-inspect-idle {
+  font-weight: 500;
+  color: var(--muted);
+  background: rgba(128, 128, 128, 0.08);
 }
 .viz-inspect-badge:empty {
   display: none;
@@ -800,7 +806,11 @@ var CppVisualizer = (function () {
       if (Array.isArray(parsed)) return parsed;
     } catch (e) {
       try {
-        var sanitized = val.replace(/'/g, '"').replace(/\.\.\./g, 'null');
+        var sanitized = val
+          .replace(/'(\\[0nrt'\\]|\\x[0-9a-fA-F]{2}|[^'\\])'/g, function (_, inner) {
+            return JSON.stringify("'" + inner + "'");
+          })
+          .replace(/\.\.\./g, '"..."');
         var p = JSON.parse(sanitized);
         if (Array.isArray(p)) return p;
       } catch (e2) {}
@@ -1917,11 +1927,16 @@ var CppVisualizer = (function () {
       exploreDiv.appendChild(inputsRow);
 
       // Inspect row directly underneath index field
+      var defaultBadgeText = dim === 1
+        ? (vname + '[i]')
+        : (dim === 2 ? (vname + '[r][c]') : (vname + '[d1][d2][d3]'));
+
       var inspectRow = document.createElement('div');
       inspectRow.className = 'viz-inspect-row';
 
       var inspectBadge = document.createElement('span');
-      inspectBadge.className = 'viz-inspect-badge';
+      inspectBadge.className = 'viz-inspect-badge viz-inspect-idle';
+      inspectBadge.textContent = defaultBadgeText;
       inspectRow.appendChild(inspectBadge);
 
       exploreDiv.appendChild(inspectRow);
@@ -1948,7 +1963,13 @@ var CppVisualizer = (function () {
         if (cell) {
           cell.classList.add('viz-cell-inspected');
         }
-        inspectBadge.textContent = exprText || '';
+        if (exprText) {
+          inspectBadge.textContent = exprText;
+          inspectBadge.classList.remove('viz-inspect-idle');
+        } else {
+          inspectBadge.textContent = defaultBadgeText;
+          inspectBadge.classList.add('viz-inspect-idle');
+        }
       }
 
       function clearInspection() {
@@ -1956,7 +1977,8 @@ var CppVisualizer = (function () {
           currentInspectedCell.classList.remove('viz-cell-inspected');
           currentInspectedCell = null;
         }
-        inspectBadge.textContent = '';
+        inspectBadge.textContent = defaultBadgeText;
+        inspectBadge.classList.add('viz-inspect-idle');
         var activeEl = (typeof document !== 'undefined') ? document.activeElement : null;
         if (inputIdx1 && activeEl !== inputIdx1) {
           inputIdx1.value = '';
@@ -3248,7 +3270,8 @@ var CppVisualizer = (function () {
     for (const d of decls) {
       const varMatch = d.match(/^[*&]?\s*([a-zA-Z_0-9]+)/);
       if (varMatch && !reserved.has(varMatch[1]) && !/^\d+$/.test(varMatch[1])) {
-        const dimMatches = d.match(/\[[^\]]*\]/g);
+        const declPart = d.split(/[=({]/)[0];
+        const dimMatches = declPart.match(/\[[^\]]*\]/g);
         const dimCount = dimMatches ? dimMatches.length : 0;
         const isArray = dimCount > 0;
         const arrType = isArray ? (type + '[]'.repeat(dimCount)) : type;
@@ -3307,6 +3330,8 @@ var CppVisualizer = (function () {
       '#include <sstream>',
       '#include <string>',
       '#include <vector>',
+      '#include <array>',
+      '#include <initializer_list>',
       '#include <utility>',
       '#include <type_traits>',
       '#include <memory>',
@@ -3319,9 +3344,10 @@ var CppVisualizer = (function () {
       '  static bool stopped = false;',
       '',
       '  inline std::string escape_json(const std::string& s) {',
+      '    static const char hex[] = "0123456789abcdef";',
       '    std::ostringstream ss;',
       '    for (size_t i = 0; i < s.length(); ++i) {',
-      '      char c = s[i];',
+      '      unsigned char c = static_cast<unsigned char>(s[i]);',
       '      if (c == \'"\') ss << "\\\\\\\"";',
       '      else if (c == \'\\\\\') ss << "\\\\\\\\";',
       '      else if (c == \'\\b\') ss << "\\\\b";',
@@ -3329,7 +3355,10 @@ var CppVisualizer = (function () {
       '      else if (c == \'\\n\') ss << "\\\\n";',
       '      else if (c == \'\\r\') ss << "\\\\r";',
       '      else if (c == \'\\t\') ss << "\\\\t";',
-      '      else ss << c;',
+      '      else if (c < 0x20) {',
+      '        ss << "\\\\u00" << hex[(c >> 4) & 0xF] << hex[c & 0xF];',
+      '      }',
+      '      else ss << static_cast<char>(c);',
       '    }',
       '    return ss.str();',
       '  }',
@@ -3341,12 +3370,23 @@ var CppVisualizer = (function () {
       '  inline std::string to_s(const T (&arr)[N]);',
       '',
       '  inline std::string to_s(bool v) { return v ? "true" : "false"; }',
-      '  inline std::string to_s(char v) { return std::string("\'") + v + "\'"; }',
+      '  inline std::string to_s(char v) {',
+      '    static const char hex[] = "0123456789abcdef";',
+      '    unsigned char c = static_cast<unsigned char>(v);',
+      '    if (c == \'\\0\') return "\'\\\\0\'";',
+      '    if (c == \'\\n\') return "\'\\\\n\'";',
+      '    if (c == \'\\r\') return "\'\\\\r\'";',
+      '    if (c == \'\\t\') return "\'\\\\t\'";',
+      '    if (c == \'\\\\\') return "\'\\\\\\\\\'";',
+      '    if (c == \'\\\'\') return "\'\\\\\'\'";',
+      '    if (c >= 32 && c <= 126) return std::string("\'") + v + "\'";',
+      '    std::string r = "\'\\\\x";',
+      '    r += hex[(c >> 4) & 0xF];',
+      '    r += hex[c & 0xF];',
+      '    r += "\'";',
+      '    return r;',
+      '  }',
       '  inline std::string to_s(const std::string& v) { return "\\"" + v + "\\""; }',
-      '  inline std::string to_s(const char* v) { return v ? (std::string("\\"") + v + "\\"") : "nullptr"; }',
-      '',
-      '  template<size_t N>',
-      '  inline std::string to_s(const char (&arr)[N]) { return std::string("\\"") + arr + "\\""; }',
       '',
       '  template<typename T1, typename T2>',
       '  inline std::string to_s(const std::pair<T1, T2>& p) {',
@@ -3355,6 +3395,19 @@ var CppVisualizer = (function () {
       '',
       '  template<typename T, size_t N>',
       '  inline std::string to_s(const T (&arr)[N]) {',
+      '    std::ostringstream ss;',
+      '    ss << "[";',
+      '    for (size_t i = 0; i < N && i < 15; ++i) {',
+      '      if (i > 0) ss << ", ";',
+      '      ss << to_s(arr[i]);',
+      '    }',
+      '    if (N > 15) ss << ", ...";',
+      '    ss << "]";',
+      '    return ss.str();',
+      '  }',
+      '',
+      '  template<typename T, size_t N>',
+      '  inline std::string to_s(const std::array<T, N>& arr) {',
       '    std::ostringstream ss;',
       '    ss << "[";',
       '    for (size_t i = 0; i < N && i < 15; ++i) {',
@@ -3384,6 +3437,14 @@ var CppVisualizer = (function () {
       '',
       '  template<typename T>',
       '  struct has_ostream_op<T, decltype(std::declval<std::ostream&>() << std::declval<const T&>(), void())> : std::true_type {};',
+      '',
+      '  inline std::string to_s_scalar(const char* v) {',
+      '    return v ? (std::string("\\"") + v + "\\"") : "nullptr";',
+      '  }',
+      '',
+      '  inline std::string to_s_scalar(char* v) {',
+      '    return v ? (std::string("\\"") + v + "\\"") : "nullptr";',
+      '  }',
       '',
       '  template<typename T>',
       '  inline typename std::enable_if<has_ostream_op<T>::value, std::string>::type',
@@ -3503,111 +3564,75 @@ var CppVisualizer = (function () {
       '    return ss.str();',
       '  }',
       '',
-      '  inline std::string arr_to_s(const char* ptr, size_t size) {',
-      '    if (!ptr || size == 0) return "\\"\\"";',
+      '  template<typename T>',
+      '  inline std::string arr_nd_to_s(const T* base, const std::vector<size_t>& dims, size_t dim_idx = 0, size_t offset = 0) {',
+      '    if (!base || dims.empty() || dim_idx >= dims.size()) return "[]";',
+      '    size_t n = dims[dim_idx];',
+      '    size_t stride = 1;',
+      '    for (size_t k = dim_idx + 1; k < dims.size(); ++k) stride *= dims[k];',
       '    std::ostringstream ss;',
-      '    ss << "\\"";',
-      '    for (size_t i = 0; i < size && i < 30; ++i) {',
-      '      if (ptr[i] == \'\\0\') break;',
-      '      if (ptr[i] == \'"\') ss << "\\\\\\\"";',
-      '      else if (ptr[i] == \'\\\\\') ss << "\\\\\\\\";',
-      '      else if (ptr[i] >= 32 && ptr[i] <= 126) ss << ptr[i];',
-      '      else ss << \' \';',
+      '    ss << "[";',
+      '    for (size_t i = 0; i < n && i < 15; ++i) {',
+      '      if (i > 0) ss << ", ";',
+      '      if (dim_idx + 1 == dims.size()) {',
+      '        ss << to_s(base[offset + i]);',
+      '      } else {',
+      '        ss << arr_nd_to_s(base, dims, dim_idx + 1, offset + i * stride);',
+      '      }',
       '    }',
-      '    ss << "\\"";',
+      '    if (n > 15) ss << ", ...";',
+      '    ss << "]";',
       '    return ss.str();',
       '  }',
       '',
-      '  inline std::string serialize_vla(const void* ptr, const char* type, size_t size) {',
-      '    if (!ptr || size == 0) return "[]";',
-      '    std::string t = type ? type : "";',
-      '    bool is_2d = (t.find("[][]") != std::string::npos);',
-      '    if (t.empty() || t.find("int") == 0 || t.find("short") == 0) {',
-      '      const int* p = static_cast<const int*>(ptr);',
-      '      if (is_2d) {',
-      '        std::ostringstream ss; ss << "[";',
-      '        for (size_t i = 0; i < size && i < 15; ++i) {',
-      '          if (i > 0) ss << ", ";',
-      '          ss << "[";',
-      '          for (size_t j = 0; j < size && j < 15; ++j) {',
-      '            if (j > 0) ss << ", ";',
-      '            ss << p[i * size + j];',
-      '          }',
-      '          if (size > 15) ss << ", ...";',
-      '          ss << "]";',
-      '        }',
-      '        if (size > 15) ss << ", ...";',
-      '        ss << "]";',
-      '        return ss.str();',
-      '      } else {',
-      '        std::ostringstream ss; ss << "[";',
-      '        for (size_t i = 0; i < size && i < 15; ++i) {',
-      '          if (i > 0) ss << ", ";',
-      '          ss << p[i];',
-      '        }',
-      '        if (size > 15) ss << ", ...";',
-      '        ss << "]";',
-      '        return ss.str();',
-      '      }',
-      '    } else if (t.find("long") == 0) {',
-      '      const long long* p = static_cast<const long long*>(ptr);',
-      '      if (is_2d) {',
-      '        std::ostringstream ss; ss << "[";',
-      '        for (size_t i = 0; i < size && i < 15; ++i) {',
-      '          if (i > 0) ss << ", ";',
-      '          ss << "[";',
-      '          for (size_t j = 0; j < size && j < 15; ++j) {',
-      '            if (j > 0) ss << ", ";',
-      '            ss << p[i * size + j];',
-      '          }',
-      '          if (size > 15) ss << ", ...";',
-      '          ss << "]";',
-      '        }',
-      '        if (size > 15) ss << ", ...";',
-      '        ss << "]";',
-      '        return ss.str();',
-      '      } else {',
-      '        std::ostringstream ss; ss << "[";',
-      '        for (size_t i = 0; i < size && i < 15; ++i) {',
-      '          if (i > 0) ss << ", ";',
-      '          ss << p[i];',
-      '        }',
-      '        if (size > 15) ss << ", ...";',
-      '        ss << "]";',
-      '        return ss.str();',
-      '      }',
-      '    } else if (t.find("double") == 0) {',
-      '      const double* p = static_cast<const double*>(ptr);',
-      '      std::ostringstream ss; ss << "[";',
-      '      for (size_t i = 0; i < size && i < 15; ++i) {',
-      '        if (i > 0) ss << ", ";',
-      '        ss << p[i];',
-      '      }',
-      '      if (size > 15) ss << ", ...";',
-      '      ss << "]"; return ss.str();',
-      '    } else if (t.find("float") == 0) {',
-      '      const float* p = static_cast<const float*>(ptr);',
-      '      std::ostringstream ss; ss << "[";',
-      '      for (size_t i = 0; i < size && i < 15; ++i) {',
-      '        if (i > 0) ss << ", ";',
-      '        ss << p[i];',
-      '      }',
-      '      if (size > 15) ss << ", ...";',
-      '      ss << "]"; return ss.str();',
-      '    } else if (t.find("char") == 0) {',
-      '      const char* p = static_cast<const char*>(ptr);',
-      '      return arr_to_s(p, size);',
-      '    } else if (t.find("bool") == 0) {',
-      '      const bool* p = static_cast<const bool*>(ptr);',
-      '      std::ostringstream ss; ss << "[";',
-      '      for (size_t i = 0; i < size && i < 15; ++i) {',
-      '        if (i > 0) ss << ", ";',
-      '        ss << (p[i] ? "true" : "false");',
-      '      }',
-      '      if (size > 15) ss << ", ...";',
-      '      ss << "]"; return ss.str();',
-      '    }',
-      '    return "[]";',
+      '  template<typename T>',
+      '  inline void arr_decl(const char* name, const char* type, const T* ptr, std::initializer_list<size_t> dims, int ln) {',
+      '    std::vector<size_t> dv(dims);',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"var_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type',
+      '       << "\\",\\"val\\":\\"" << escape_json(arr_nd_to_s(ptr, dv))',
+      '       << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr)',
+      '       << "\\",\\"line\\":" << ln << "}";',
+      '    emit(ss.str());',
+      '  }',
+      '',
+      '  template<typename T>',
+      '  inline void arr_global_decl(const char* name, const char* type, const T* ptr, std::initializer_list<size_t> dims, int ln) {',
+      '    std::vector<size_t> dv(dims);',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"global_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type',
+      '       << "\\",\\"val\\":\\"" << escape_json(arr_nd_to_s(ptr, dv))',
+      '       << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr)',
+      '       << "\\",\\"line\\":" << ln << "}";',
+      '    emit(ss.str());',
+      '  }',
+      '',
+      '  template<typename T>',
+      '  inline void arr_set(const char* name, const char* type, const T* ptr, std::initializer_list<size_t> dims, int ln) {',
+      '    (void)type;',
+      '    std::vector<size_t> dv(dims);',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"var_set\\",\\"name\\":\\"" << name',
+      '       << "\\",\\"val\\":\\"" << escape_json(arr_nd_to_s(ptr, dv))',
+      '       << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr)',
+      '       << "\\",\\"line\\":" << ln << "}";',
+      '    emit(ss.str());',
+      '  }',
+      '',
+      '  template<typename T, typename E>',
+      '  inline void arr_io_input_event(const char* base_name, const T* ptr, std::initializer_list<size_t> dims, const char* expr_name, const E& expr_val, int ln, int c_from, int c_to, bool is_getline = false) {',
+      '    std::vector<size_t> dv(dims);',
+      '    std::ostringstream ss;',
+      '    ss << "{\\"e\\":\\"io\\",\\"io\\":\\"input\\",\\"name\\":\\"" << base_name',
+      '       << "\\",\\"val\\":\\"" << escape_json(arr_nd_to_s(ptr, dv))',
+      '       << "\\",\\"expr\\":\\"" << expr_name',
+      '       << "\\",\\"inputVal\\":\\"" << escape_json(to_s(expr_val))',
+      '       << "\\",\\"isGetline\\":" << (is_getline ? "true" : "false")',
+      '       << ",\\"colFrom\\":" << c_from',
+      '       << ",\\"colTo\\":" << c_to',
+      '       << ",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr) << "\\""',
+      '       << ",\\"line\\":" << ln << "}";',
+      '    emit(ss.str());',
       '  }',
       '',
       '  // Fixed-size compile-time arrays (1D, 2D, 3D, etc.)',
@@ -3657,53 +3682,6 @@ var CppVisualizer = (function () {
       '       << ",\\"colFrom\\":" << c_from',
       '       << ",\\"colTo\\":" << c_to',
       '       << ",\\"addr\\":\\"" << get_addr(arr) << "\\""',
-      '       << ",\\"line\\":" << ln << "}";',
-      '    emit(ss.str());',
-      '  }',
-      '',
-      '  // Non-template overloads for VLAs (Variable Length Arrays)',
-      '  inline void arr_decl(const char* name, const char* type, const void* ptr, size_t size, int ln) {',
-      '    std::ostringstream ss;',
-      '    ss << "{\\"e\\":\\"var_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type',
-      '       << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, type, size))',
-      '       << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr)',
-      '       << "\\",\\"line\\":" << ln << "}";',
-      '    emit(ss.str());',
-      '  }',
-      '',
-      '  inline void arr_global_decl(const char* name, const char* type, const void* ptr, size_t size, int ln) {',
-      '    std::ostringstream ss;',
-      '    ss << "{\\"e\\":\\"global_decl\\",\\"name\\":\\"" << name << "\\",\\"type\\":\\"" << type',
-      '       << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, type, size))',
-      '       << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr)',
-      '       << "\\",\\"line\\":" << ln << "}";',
-      '    emit(ss.str());',
-      '  }',
-      '',
-      '  inline void arr_set(const char* name, const char* type, const void* ptr, size_t size, int ln) {',
-      '    std::ostringstream ss;',
-      '    ss << "{\\"e\\":\\"var_set\\",\\"name\\":\\"" << name',
-      '       << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, type, size))',
-      '       << "\\",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr)',
-      '       << "\\",\\"line\\":" << ln << "}";',
-      '    emit(ss.str());',
-      '  }',
-      '',
-      '  inline void arr_set(const char* name, const void* ptr, size_t size, int ln) {',
-      '    arr_set(name, "", ptr, size, ln);',
-      '  }',
-      '',
-      '  template<typename E>',
-      '  inline void arr_io_input_event(const char* base_name, const void* ptr, size_t size, const char* expr_name, const E& expr_val, int ln, int c_from, int c_to) {',
-      '    std::ostringstream ss;',
-      '    ss << "{\\"e\\":\\"io\\",\\"io\\":\\"input\\",\\"name\\":\\"" << base_name',
-      '       << "\\",\\"val\\":\\"" << escape_json(serialize_vla(ptr, "", size))',
-      '       << "\\",\\"expr\\":\\"" << expr_name',
-      '       << "\\",\\"inputVal\\":\\"" << escape_json(to_s(expr_val))',
-      '       << "\\",\\"isGetline\\":false"',
-      '       << ",\\"colFrom\\":" << c_from',
-      '       << ",\\"colTo\\":" << c_to',
-      '       << ",\\"addr\\":\\"" << reinterpret_cast<uintptr_t>(ptr) << "\\""',
       '       << ",\\"line\\":" << ln << "}";',
       '    emit(ss.str());',
       '  }',
@@ -4102,6 +4080,34 @@ var CppVisualizer = (function () {
     const outLines = [];
     const knownArrays = new Set();
     const knownArrayTypes = new Map();
+    const knownArrayRanks = new Map();
+    const buildArrArgs = (name, rank) => {
+      const r = Math.max(1, rank || 1);
+      let baseExpr = name;
+      const dims = [];
+      for (let d = 0; d < r; d++) {
+        const nextExpr = baseExpr + '[0]';
+        dims.push(`(sizeof(${nextExpr}) ? sizeof(${baseExpr})/sizeof(${nextExpr}) : 0)`);
+        baseExpr = nextExpr;
+      }
+      return `&${baseExpr}, {${dims.join(', ')}}`;
+    };
+    const countBraces = (str) => {
+      let open = 0, close = 0;
+      let inStr = false, quote = '';
+      for (let i = 0; i < str.length; i++) {
+        const c = str[i];
+        if (!inStr && c === '/' && str[i + 1] === '/') break;
+        if ((c === '"' || c === "'") && (i === 0 || str[i - 1] !== '\\')) {
+          if (!inStr) { inStr = true; quote = c; }
+          else if (quote === c) inStr = false;
+        } else if (!inStr) {
+          if (c === '{') open++;
+          else if (c === '}') close++;
+        }
+      }
+      return { open, close };
+    };
     let scopeStack = [];
     const activeForLoops = [];
     let inFunction = false;
@@ -4114,10 +4120,36 @@ var CppVisualizer = (function () {
     let passInFunc = false;
     let pendingPassFunc = false;
     let passDepth = 0;
+    let passInInit = false;
+    let passInitDepth = 0;
+    let passInitBuffer = '';
+    let passInitStartLine = 0;
     for (let pi = 0; pi < lines.length; pi++) {
       const pLine = lines[pi];
       const pTrimmed = pLine.trim();
       if (!pTrimmed || pTrimmed.startsWith('//') || pTrimmed.startsWith('/*') || pTrimmed.startsWith('#')) continue;
+      if (passInInit) {
+        const bc = countBraces(pLine);
+        passInitDepth += bc.open - bc.close;
+        passInitBuffer += ' ' + pTrimmed;
+        if (passInitDepth <= 0 && pTrimmed.endsWith(';')) {
+          passInInit = false;
+          const dm = parseDecl(passInitBuffer);
+          if (dm) {
+            for (const v of dm.vars) {
+              const actualType = v.arrType || (dm.type + (v.isArray ? '[]' : ''));
+              if (v.isArray) {
+                knownArrays.add(v.name);
+                knownArrayTypes.set(v.name, actualType);
+                knownArrayRanks.set(v.name, v.dimCount || 1);
+              }
+              globalVars.push({ name: v.name, type: actualType, line: passInitStartLine, isArray: v.isArray, dimCount: v.dimCount || 1 });
+            }
+          }
+          passInitBuffer = '';
+        }
+        continue;
+      }
       const singleLineFMatch = pTrimmed.match(/^((?:(?:const|unsigned|signed|static|inline|virtual|long)\s+)*[a-zA-Z_0-9:<>\*&]+(?:\s+[*&]*)?)\s+([a-zA-Z_0-9]+)\s*\(([^)]*)\)\s*\{(.+)\}\s*$/);
       if (singleLineFMatch && !['if', 'for', 'while', 'switch', 'catch'].includes(singleLineFMatch[2])) {
         continue;
@@ -4134,8 +4166,14 @@ var CppVisualizer = (function () {
         passInFunc = true;
         pendingPassFunc = false;
       }
-      const ob = (pLine.match(/\{/g) || []).length;
-      const cb = (pLine.match(/\}/g) || []).length;
+      const { open: ob, close: cb } = countBraces(pLine);
+      if (!passInFunc && !pendingPassFunc && passDepth === 0 && ob > cb && pTrimmed.includes('=')) {
+        passInInit = true;
+        passInitDepth = ob - cb;
+        passInitBuffer = pTrimmed;
+        passInitStartLine = lineNums[pi];
+        continue;
+      }
       passDepth += ob - cb;
       if (passDepth <= 0 && cb > 0) {
         passInFunc = false;
@@ -4149,12 +4187,18 @@ var CppVisualizer = (function () {
             if (v.isArray) {
               knownArrays.add(v.name);
               knownArrayTypes.set(v.name, actualType);
+              knownArrayRanks.set(v.name, v.dimCount || 1);
             }
-            globalVars.push({ name: v.name, type: actualType, line: lineNums[pi], isArray: v.isArray });
+            globalVars.push({ name: v.name, type: actualType, line: lineNums[pi], isArray: v.isArray, dimCount: v.dimCount || 1 });
           }
         }
       }
     }
+
+    let inInitializer = false;
+    let initBraceDepth = 0;
+    let initBuffer = '';
+    let initStartLine = 0;
 
     const buildParamsJson = (pList) => {
       if (!pList.length) return '"[]"';
@@ -4209,7 +4253,7 @@ var CppVisualizer = (function () {
         if (funcName === 'main' && globalVars.length > 0) {
           for (const gv of globalVars) {
             if (gv.isArray) {
-              gvInjections += ` __viz::arr_global_decl("${gv.name}", "${gv.type}", ${gv.name}, sizeof(${gv.name})/sizeof(${gv.name}[0]), ${gv.line});`;
+              gvInjections += ` __viz::arr_global_decl("${gv.name}", "${gv.type}", ${buildArrArgs(gv.name, gv.dimCount)}, ${gv.line});`;
             } else {
               gvInjections += ` __viz::global_decl("${gv.name}", "${gv.type}", ${gv.name}, ${gv.line});`;
             }
@@ -4260,7 +4304,7 @@ var CppVisualizer = (function () {
           if (funcName === 'main' && globalVars.length > 0) {
             for (const gv of globalVars) {
               if (gv.isArray) {
-                outLines.push(`    __viz::arr_global_decl("${gv.name}", "${gv.type}", ${gv.name}, sizeof(${gv.name})/sizeof(${gv.name}[0]), ${gv.line});`);
+                outLines.push(`    __viz::arr_global_decl("${gv.name}", "${gv.type}", ${buildArrArgs(gv.name, gv.dimCount)}, ${gv.line});`);
               } else {
                 outLines.push(`    __viz::global_decl("${gv.name}", "${gv.type}", ${gv.name}, ${gv.line});`);
               }
@@ -4286,7 +4330,7 @@ var CppVisualizer = (function () {
         if (pendingFunc.funcName === 'main' && globalVars.length > 0) {
           for (const gv of globalVars) {
             if (gv.isArray) {
-              outLines.push(`    __viz::arr_global_decl("${gv.name}", "${gv.type}", ${gv.name}, sizeof(${gv.name})/sizeof(${gv.name}[0]), ${gv.line});`);
+              outLines.push(`    __viz::arr_global_decl("${gv.name}", "${gv.type}", ${buildArrArgs(gv.name, gv.dimCount)}, ${gv.line});`);
             } else {
               outLines.push(`    __viz::global_decl("${gv.name}", "${gv.type}", ${gv.name}, ${gv.line});`);
             }
@@ -4396,8 +4440,54 @@ var CppVisualizer = (function () {
       }
       const trimmedCode = codeWithoutComment.trim();
 
-      const openBraces = (rawLine.match(/\{/g) || []).length;
-      const closeBraces = (rawLine.match(/\}/g) || []).length;
+      const { open: openBraces, close: closeBraces } = countBraces(codeWithoutComment);
+
+      // Continue an ongoing multi-line brace initializer (e.g. multi-line 1D/2D array initialization)
+      if (inInitializer) {
+        outLines.push(rawLine);
+        initBraceDepth += openBraces - closeBraces;
+        initBuffer += ' ' + trimmedCode;
+        if (initBraceDepth <= 0 && trimmedCode.endsWith(';')) {
+          inInitializer = false;
+          if (inFunction) {
+            const multiDecl = parseDecl(initBuffer);
+            if (multiDecl) {
+              for (const v of multiDecl.vars) {
+                if (scopeStack.length > 0) {
+                  scopeStack[scopeStack.length - 1].vars.push(v.name);
+                }
+                if (v.isArray) {
+                  knownArrays.add(v.name);
+                  const actualType = v.arrType || (multiDecl.type + '[]');
+                  knownArrayTypes.set(v.name, actualType);
+                  knownArrayRanks.set(v.name, v.dimCount || 1);
+                  outLines.push(`    __viz::arr_decl("${v.name}", "${actualType}", ${buildArrArgs(v.name, v.dimCount)}, ${initStartLine});`);
+                } else {
+                  outLines.push(`    __viz::var_decl("${v.name}", "${multiDecl.type}", ${v.name}, ${initStartLine});`);
+                }
+              }
+            }
+          }
+          initBuffer = '';
+        }
+        continue;
+      }
+
+      // Detect start of a multi-line brace initializer: e.g. `string arr[2][2] = {`
+      if (openBraces > closeBraces && trimmedCode.includes('=') && !trimmedCode.endsWith(';')) {
+        const beforeEq = trimmedCode.slice(0, trimmedCode.indexOf('=')).trim();
+        if (!/^(?:if|else|while|for|switch|return)\b/.test(beforeEq)) {
+          if (inFunction && !rawLine.startsWith('#')) {
+            outLines.push(`    __viz::line(${lineNum});`);
+          }
+          outLines.push(rawLine);
+          inInitializer = true;
+          initBraceDepth = openBraces - closeBraces;
+          initBuffer = trimmedCode;
+          initStartLine = lineNum;
+          continue;
+        }
+      }
 
       let closingVars = [];
       let suppressLine = false;
@@ -4461,7 +4551,7 @@ var CppVisualizer = (function () {
       }
 
       // Container method calls: v.push_back(...), v.pop_back(), arr[i].push_back(...), etc.
-      const containerMethodRe = /(?:^|[;{}(,\s])([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])*\s*\.\s*(?:push_back|emplace_back|pop_back|push|pop|insert|emplace|erase|clear|resize|assign|shrink_to_fit|swap)\s*\(/g;
+      const containerMethodRe = /(?:^|[;{}(,\s])([a-zA-Z_0-9]+)(?:\s*\[[^\]]*\])*\s*\.\s*(?:push_back|emplace_back|pop_back|push|pop|insert|emplace|erase|clear|resize|assign|append|replace|shrink_to_fit|swap)\s*\(/g;
       let cmm;
       while ((cmm = containerMethodRe.exec(trimmedCode)) !== null) {
         if (!reserved.has(cmm[1])) modifiedVars.add(cmm[1]);
@@ -4609,7 +4699,8 @@ var CppVisualizer = (function () {
             knownArrays.add(v.name);
             const actualType = v.arrType || (declMatch.type + '[]');
             knownArrayTypes.set(v.name, actualType);
-            outLines.push(`    __viz::arr_decl("${v.name}", "${actualType}", ${v.name}, sizeof(${v.name})/sizeof(${v.name}[0]), ${lineNum});`);
+            knownArrayRanks.set(v.name, v.dimCount || 1);
+            outLines.push(`    __viz::arr_decl("${v.name}", "${actualType}", ${buildArrArgs(v.name, v.dimCount)}, ${lineNum});`);
           } else {
             outLines.push(`    __viz::var_decl("${v.name}", "${declMatch.type}", ${v.name}, ${lineNum});`);
           }
@@ -4619,7 +4710,10 @@ var CppVisualizer = (function () {
         const declNames = declMatch ? new Set(declMatch.vars.map(v => v.name)) : null;
         for (const varName of modifiedVars) {
           if ((!declNames || !declNames.has(varName)) && !inputBaseNames.has(varName)) {
-            if (knownArrays.has(varName)) {
+            if (knownArrayRanks.has(varName)) {
+              const aType = knownArrayTypes.get(varName) || '';
+              outLines.push(`    __viz::arr_set("${varName}", "${aType}", ${buildArrArgs(varName, knownArrayRanks.get(varName))}, ${lineNum});`);
+            } else if (knownArrays.has(varName)) {
               const aType = knownArrayTypes.get(varName) || '';
               outLines.push(`    __viz::arr_set("${varName}", "${aType}", ${varName}, sizeof(${varName})/sizeof(${varName}[0]), ${lineNum});`);
             } else {
@@ -4632,7 +4726,9 @@ var CppVisualizer = (function () {
       if (isInput && inFunction) {
         if (inputVars.length > 0) {
           for (const iv of inputVars) {
-            if (knownArrays.has(iv.base)) {
+            if (knownArrayRanks.has(iv.base)) {
+              outLines.push(`    __viz::arr_io_input_event("${iv.base}", ${buildArrArgs(iv.base, knownArrayRanks.get(iv.base))}, "${iv.expr}", ${iv.expr}, ${lineNum}, ${iv.colFrom}, ${iv.colTo}, ${iv.isGetline ? 'true' : 'false'});`);
+            } else if (knownArrays.has(iv.base)) {
               outLines.push(`    __viz::arr_io_input_event("${iv.base}", ${iv.base}, sizeof(${iv.base})/sizeof(${iv.base}[0]), "${iv.expr}", ${iv.expr}, ${lineNum}, ${iv.colFrom}, ${iv.colTo});`);
             } else {
               outLines.push(`    __viz::io_input_event("${iv.base}", ${iv.base}, "${iv.expr}", ${iv.expr}, ${lineNum}, ${iv.colFrom}, ${iv.colTo}, ${iv.isGetline ? 'true' : 'false'});`);
